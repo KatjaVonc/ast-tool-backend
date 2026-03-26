@@ -54,7 +54,8 @@ def synthesise_streaming(text, target_lang, ws):
 
     async def _stream():
         voice   = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
-        tts_url = f"wss://api.deepgram.com/v1/speak?model={voice}&encoding=mp3"
+        # Correct Deepgram streaming TTS URL - linear16 encoding for reliable chunking
+        tts_url = f"wss://api.deepgram.com/v1/speak?model={voice}&encoding=linear16&sample_rate=24000"
         print(f"[TTS] Streaming {voice}...", flush=True)
 
         try:
@@ -63,30 +64,34 @@ def synthesise_streaming(text, target_lang, ws):
                 extra_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
                 ping_interval=None,
             ) as tts_ws:
-                # Send text
-                await tts_ws.send(json.dumps({"type": "Speak", "text": text}))
-                # Signal end of input
+                # Send text (correct message type is "Text")
+                await tts_ws.send(json.dumps({"type": "Text", "text": text}))
+                # Flush to trigger audio generation
                 await tts_ws.send(json.dumps({"type": "Flush"}))
+                # Close after flush
+                await tts_ws.send(json.dumps({"type": "Close"}))
 
                 chunk_index = 0
                 async for message in tts_ws:
                     if isinstance(message, bytes) and len(message) > 0:
-                        # Send each audio chunk immediately to the client
                         chunk_b64 = base64.b64encode(message).decode('utf-8')
                         ws.send(json.dumps({
                             'type':        'tts_chunk',
                             'audio_b64':   chunk_b64,
-                            'audio_type':  'audio/mpeg',
+                            'audio_type':  'audio/wav',
+                            'sample_rate': 24000,
                             'chunk_index': chunk_index,
                         }))
                         chunk_index += 1
                     elif isinstance(message, str):
-                        data = json.loads(message)
-                        # Flushed = all audio sent
-                        if data.get('type') == 'Flushed':
-                            ws.send(json.dumps({'type': 'tts_done'}))
-                            print(f"[TTS] Done, {chunk_index} chunks", flush=True)
-                            break
+                        try:
+                            data = json.loads(message)
+                            if data.get('type') == 'Flushed':
+                                ws.send(json.dumps({'type': 'tts_done'}))
+                                print(f"[TTS] Done, {chunk_index} chunks", flush=True)
+                                break
+                        except:
+                            pass
         except Exception as e:
             print(f"[TTS] Stream error: {e}", flush=True)
 
