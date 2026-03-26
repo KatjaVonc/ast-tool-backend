@@ -1,7 +1,8 @@
 flask==3.0.3
 flask-cors==4.0.1
+flask-sock==0.7.0
 requests==2.32.3
-gevent==24.2.1
-gevent-websocket==0.10.1
 websocket-client==1.8.0
+gunicorn==22.0.0
+simple-websocket==1.0.0
  
