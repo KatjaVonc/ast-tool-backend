@@ -13,47 +13,30 @@ CORS(app)
 sock = Sock(app)
 
 DEEPGRAM_API_KEY = os.environ.get('DEEPGRAM_API_KEY', '')
-DEEPL_API_KEY = os.environ.get('DEEPL_API_KEY', '')
+DEEPL_API_KEY    = os.environ.get('DEEPL_API_KEY', '')
 
-LANGUAGE_NAMES = {"de": "German", "it": "Italian"}
-DEEPGRAM_VOICE  = {"it": "aura-2-livia-it", "de": "aura-2-viktoria-de"}
+DEEPGRAM_VOICE = {"it": "aura-2-livia-it", "de": "aura-2-viktoria-de"}
 
 @app.route('/')
 def home():
-    return {
-        'status': 'ok',
-        'name': 'AST Tool Backend',
-        'deepgram_configured': bool(DEEPGRAM_API_KEY),
-        'anthropic_configured': bool(ANTHROPIC_API_KEY)
-    }
+    return {'status': 'ok', 'name': 'AST Tool Backend'}
 
 @app.route('/health')
 def health():
     return {'status': 'healthy'}
 
 
-def translate_with_claude(text, source_lang, target_lang):
-    """DeepL translation - fast, low latency"""
+def translate(text, source_lang, target_lang):
     try:
-        # DeepL language codes
-        deepl_src = source_lang.upper()  # DE, IT
-        deepl_tgt = target_lang.upper()  # DE, IT
         resp = requests.post(
             'https://api-free.deepl.com/v2/translate',
-            headers={
-                'Authorization': f'DeepL-Auth-Key {DEEPL_API_KEY}',
-                'Content-Type':  'application/json',
-            },
-            json={
-                'text':        [text],
-                'source_lang': deepl_src,
-                'target_lang': deepl_tgt,
-            },
+            headers={'Authorization': f'DeepL-Auth-Key {DEEPL_API_KEY}', 'Content-Type': 'application/json'},
+            json={'text': [text], 'source_lang': source_lang.upper(), 'target_lang': target_lang.upper()},
             timeout=5,
         )
         if resp.status_code == 200:
             result = resp.json()['translations'][0]['text']
-            print(f"[MT] DeepL: {result[:60]}", flush=True)
+            print(f"[MT] {result[:80]}", flush=True)
             return result
         print(f"[MT] DeepL error {resp.status_code}: {resp.text}", flush=True)
     except Exception as e:
@@ -61,27 +44,53 @@ def translate_with_claude(text, source_lang, target_lang):
     return None
 
 
-def synthesise_speech(text, target_lang):
-    try:
-        voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
-        print(f"[TTS] Calling Deepgram voice={voice} text_len={len(text)}", flush=True)
-        resp = requests.post(
-            f'https://api.deepgram.com/v1/speak?model={voice}',
-            headers={
-                'Authorization': f'Token {DEEPGRAM_API_KEY}',
-                'Content-Type':  'application/json',
-            },
-            json={'text': text},
-            timeout=15,
-        )
-        print(f"[TTS] Response status: {resp.status_code}", flush=True)
-        if resp.status_code == 200:
-            print(f"[TTS] Success, audio bytes: {len(resp.content)}", flush=True)
-            return base64.b64encode(resp.content).decode('utf-8')
-        print(f"[TTS] Error {resp.status_code}: {resp.text}", flush=True)
-    except Exception as e:
-        print(f"[TTS] Exception: {e}", flush=True)
-    return None
+def synthesise_streaming(text, target_lang, ws):
+    """
+    Stream TTS via Deepgram WebSocket TTS API.
+    Sends audio chunks to the client as they arrive — no waiting for full file.
+    """
+    import websockets
+    import asyncio
+
+    async def _stream():
+        voice   = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
+        tts_url = f"wss://api.deepgram.com/v1/speak?model={voice}&encoding=mp3"
+        print(f"[TTS] Streaming {voice}...", flush=True)
+
+        try:
+            async with websockets.connect(
+                tts_url,
+                extra_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
+                ping_interval=None,
+            ) as tts_ws:
+                # Send text
+                await tts_ws.send(json.dumps({"type": "Speak", "text": text}))
+                # Signal end of input
+                await tts_ws.send(json.dumps({"type": "Flush"}))
+
+                chunk_index = 0
+                async for message in tts_ws:
+                    if isinstance(message, bytes) and len(message) > 0:
+                        # Send each audio chunk immediately to the client
+                        chunk_b64 = base64.b64encode(message).decode('utf-8')
+                        ws.send(json.dumps({
+                            'type':        'tts_chunk',
+                            'audio_b64':   chunk_b64,
+                            'audio_type':  'audio/mpeg',
+                            'chunk_index': chunk_index,
+                        }))
+                        chunk_index += 1
+                    elif isinstance(message, str):
+                        data = json.loads(message)
+                        # Flushed = all audio sent
+                        if data.get('type') == 'Flushed':
+                            ws.send(json.dumps({'type': 'tts_done'}))
+                            print(f"[TTS] Done, {chunk_index} chunks", flush=True)
+                            break
+        except Exception as e:
+            print(f"[TTS] Stream error: {e}", flush=True)
+
+    asyncio.run(_stream())
 
 
 @sock.route('/ws')
@@ -110,10 +119,13 @@ def websocket_endpoint(ws):
                             except queue.Full:
                                 pass
                         elif isinstance(msg, str):
-                            data = json.loads(msg)
-                            if data.get('type') == 'close':
-                                stop_flag.set()
-                                break
+                            try:
+                                data = json.loads(msg)
+                                if data.get('type') == 'close':
+                                    stop_flag.set()
+                                    break
+                            except:
+                                pass
                 except:
                     continue
 
@@ -133,7 +145,7 @@ def websocket_endpoint(ws):
                     f"&sample_rate=16000"
                 )
                 headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
-                print("Connecting to Deepgram...", flush=True)
+                print("Connecting to Deepgram ASR...", flush=True)
 
                 try:
                     async with websockets.connect(
@@ -142,7 +154,7 @@ def websocket_endpoint(ws):
                         ping_interval=5,
                         ping_timeout=10
                     ) as dg_ws:
-                        print("Connected to Deepgram", flush=True)
+                        print("Connected to Deepgram ASR", flush=True)
 
                         async def send_audio():
                             try:
@@ -153,7 +165,6 @@ def websocket_endpoint(ws):
                                         await dg_ws.send(audio_data)
                                         last_keepalive = asyncio.get_event_loop().time()
                                     except queue.Empty:
-                                        # Send keepalive if no audio for >5s
                                         now = asyncio.get_event_loop().time()
                                         if now - last_keepalive > 5:
                                             await dg_ws.send(json.dumps({"type": "KeepAlive"}))
@@ -183,21 +194,25 @@ def websocket_endpoint(ws):
                                         }))
                                     else:
                                         print(f"[ASR] {transcript}", flush=True)
-                                        translation = translate_with_claude(transcript, source_lang, target_lang)
+                                        translation = translate(transcript, source_lang, target_lang)
                                         if not translation:
                                             ws.send(json.dumps({'transcript': transcript, 'is_final': True}))
                                             continue
-                                        print(f"[MT] {translation}", flush=True)
-                                        audio_b64 = synthesise_speech(translation, target_lang)
-                                        payload = {
+
+                                        # Send text immediately — don't wait for TTS
+                                        ws.send(json.dumps({
                                             'transcript':  transcript,
                                             'translation': translation,
                                             'is_final':    True,
-                                        }
-                                        if audio_b64:
-                                            payload['audio_b64']  = audio_b64
-                                            payload['audio_type'] = 'audio/mpeg'
-                                        ws.send(json.dumps(payload))
+                                        }))
+
+                                        # Stream TTS in a separate thread so ASR keeps running
+                                        tts_thread = threading.Thread(
+                                            target=synthesise_streaming,
+                                            args=(translation, target_lang, ws),
+                                            daemon=True
+                                        )
+                                        tts_thread.start()
 
                             except Exception as e:
                                 print(f"Receive error: {e}", flush=True)
@@ -209,7 +224,7 @@ def websocket_endpoint(ws):
                         )
 
                 except Exception as e:
-                    print(f"Deepgram connection error: {e}", flush=True)
+                    print(f"Deepgram ASR connection error: {e}", flush=True)
 
             asyncio.run(stream())
 
