@@ -4,5 +4,3 @@ flask-sock==0.7.0
 requests==2.32.3
 websocket-client==1.8.0
 gunicorn==22.0.0
-simple-websocket==1.0.0
- 
