@@ -46,56 +46,44 @@ def translate(text, source_lang, target_lang):
 
 def synthesise_streaming(text, target_lang, ws):
     """
-    Stream TTS via Deepgram WebSocket TTS API.
-    Sends audio chunks to the client as they arrive — no waiting for full file.
+    Stream TTS via Deepgram REST with HTTP streaming.
+    Uses requests stream=True to send audio chunks as they arrive.
     """
-    import websockets
-    import asyncio
+    try:
+        voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
+        print(f"[TTS] Streaming REST {voice}...", flush=True)
 
-    async def _stream():
-        voice   = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
-        # Correct Deepgram streaming TTS URL - linear16 encoding for reliable chunking
-        tts_url = f"wss://api.deepgram.com/v1/speak?model={voice}&encoding=linear16&sample_rate=24000"
-        print(f"[TTS] Streaming {voice}...", flush=True)
+        with requests.post(
+            f'https://api.deepgram.com/v1/speak?model={voice}',
+            headers={
+                'Authorization': f'Token {DEEPGRAM_API_KEY}',
+                'Content-Type':  'application/json',
+            },
+            json={'text': text},
+            stream=True,
+            timeout=15,
+        ) as resp:
+            if resp.status_code != 200:
+                print(f"[TTS] Error {resp.status_code}", flush=True)
+                return
 
-        try:
-            async with websockets.connect(
-                tts_url,
-                extra_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
-                ping_interval=None,
-            ) as tts_ws:
-                # Send text (correct message type is "Text")
-                await tts_ws.send(json.dumps({"type": "Text", "text": text}))
-                # Flush to trigger audio generation
-                await tts_ws.send(json.dumps({"type": "Flush"}))
-                # Close after flush
-                await tts_ws.send(json.dumps({"type": "Close"}))
+            chunk_index = 0
+            for chunk in resp.iter_content(chunk_size=4096):
+                if chunk:
+                    chunk_b64 = base64.b64encode(chunk).decode('utf-8')
+                    ws.send(json.dumps({
+                        'type':        'tts_chunk',
+                        'audio_b64':   chunk_b64,
+                        'audio_type':  'audio/mpeg',
+                        'chunk_index': chunk_index,
+                    }))
+                    chunk_index += 1
 
-                chunk_index = 0
-                async for message in tts_ws:
-                    if isinstance(message, bytes) and len(message) > 0:
-                        chunk_b64 = base64.b64encode(message).decode('utf-8')
-                        ws.send(json.dumps({
-                            'type':        'tts_chunk',
-                            'audio_b64':   chunk_b64,
-                            'audio_type':  'audio/wav',
-                            'sample_rate': 24000,
-                            'chunk_index': chunk_index,
-                        }))
-                        chunk_index += 1
-                    elif isinstance(message, str):
-                        try:
-                            data = json.loads(message)
-                            if data.get('type') == 'Flushed':
-                                ws.send(json.dumps({'type': 'tts_done'}))
-                                print(f"[TTS] Done, {chunk_index} chunks", flush=True)
-                                break
-                        except:
-                            pass
-        except Exception as e:
-            print(f"[TTS] Stream error: {e}", flush=True)
+            ws.send(json.dumps({'type': 'tts_done'}))
+            print(f"[TTS] Done, {chunk_index} chunks", flush=True)
 
-    asyncio.run(_stream())
+    except Exception as e:
+        print(f"[TTS] Stream error: {e}", flush=True)
 
 
 @sock.route('/ws')
