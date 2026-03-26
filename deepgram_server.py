@@ -133,9 +133,7 @@ def websocket_endpoint(ws):
                     f"&language={source_lang}"
                     f"&smart_format=true"
                     f"&interim_results=true"
-                    f"&utterance_end_ms=1000"
                     f"&endpointing=1000"
-                    f"&vad_events=true"
                     f"&encoding=linear16"
                     f"&sample_rate=16000"
                 )
@@ -146,8 +144,8 @@ def websocket_endpoint(ws):
                     async with websockets.connect(
                         dg_url,
                         extra_headers=headers,
-                        ping_interval=5,
-                        ping_timeout=10
+                        ping_interval=10,
+                        ping_timeout=30
                     ) as dg_ws:
                         print("Connected to Deepgram ASR", flush=True)
 
@@ -172,6 +170,9 @@ def websocket_endpoint(ws):
                             try:
                                 async for msg in dg_ws:
                                     data = json.loads(msg)
+                                    # Skip non-dict messages (VAD events come as lists)
+                                    if not isinstance(data, dict):
+                                        continue
                                     if 'channel' not in data:
                                         continue
                                     alts = data['channel'].get('alternatives', [])
