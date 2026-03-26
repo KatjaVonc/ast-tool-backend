@@ -1,17 +1,15 @@
 """
 AST Tool Backend
-Pipeline: Audio → Whisper (ASR) → Claude (MT) → Deepgram (TTS) → Audio
+Pipeline: Audio → Deepgram (ASR) → Claude (MT) → Deepgram (TTS) → Audio
 """
 
 import os
-import io
-import json
+import base64
 import tempfile
 import requests
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import anthropic
-import whisper
 
 app = Flask(__name__)
 CORS(app)
@@ -20,20 +18,20 @@ CORS(app)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 DEEPGRAM_API_KEY  = os.environ.get("DEEPGRAM_API_KEY")
 
-# ── Whisper model (loaded once at startup) ─────────────────────────────────────
-print("Loading Whisper model...")
-whisper_model = whisper.load_model("base")   # "small" for better accuracy, costs ~1GB RAM
-print("Whisper ready.")
-
 # ── Language config ────────────────────────────────────────────────────────────
 LANGUAGE_NAMES = {
     "de": "German",
     "it": "Italian",
 }
 
+DEEPGRAM_LANG = {
+    "de": "de",
+    "it": "it",
+}
+
 DEEPGRAM_VOICE = {
-    "it": "aura-2-andromeda-it",   # Italian female — change if you prefer another
-    "de": "aura-2-thalia-de",      # German female
+    "it": "aura-2-andromeda-it",
+    "de": "aura-2-thalia-de",
 }
 
 # ── Health check ───────────────────────────────────────────────────────────────
@@ -44,15 +42,6 @@ def health():
 # ── Main pipeline endpoint ─────────────────────────────────────────────────────
 @app.route("/translate-speech", methods=["POST"])
 def translate_speech():
-    """
-    Expects:
-      - audio file in multipart form field "audio"
-      - form field "source_lang" (e.g. "de")
-      - form field "target_lang" (e.g. "it")
-    Returns:
-      JSON with keys: transcript, translation, audio_url
-      (audio is returned as base64 in the same response for simplicity)
-    """
     if "audio" not in request.files:
         return jsonify({"error": "No audio file provided"}), 400
 
@@ -60,25 +49,44 @@ def translate_speech():
     source_lang = request.form.get("source_lang", "de")
     target_lang = request.form.get("target_lang", "it")
 
-    # ── Step 1: Save audio to temp file ───────────────────────────────────────
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+    suffix = os.path.splitext(audio_file.filename)[1] or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         audio_file.save(tmp.name)
         tmp_path = tmp.name
 
     try:
-        # ── Step 2: Whisper ASR ───────────────────────────────────────────────
-        print(f"[ASR] Transcribing {source_lang} audio...")
-        result = whisper_model.transcribe(tmp_path, language=source_lang)
-        transcript = result["text"].strip()
+        # ── Step 2: Deepgram ASR ──────────────────────────────────────────────
+        print(f"[ASR] Transcribing {source_lang} audio with Deepgram...")
+        dg_lang = DEEPGRAM_LANG.get(source_lang, source_lang)
+
+        with open(tmp_path, "rb") as f:
+            audio_bytes = f.read()
+
+        asr_response = requests.post(
+            f"https://api.deepgram.com/v1/listen?language={dg_lang}&model=nova-2&punctuate=true",
+            headers={
+                "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                "Content-Type":  "audio/mpeg",
+            },
+            data=audio_bytes,
+            timeout=60,
+        )
+
+        if asr_response.status_code != 200:
+            return jsonify({"error": f"ASR failed: {asr_response.status_code}"}), 500
+
+        asr_data   = asr_response.json()
+        transcript = (
+            asr_data["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
+        )
         print(f"[ASR] Transcript: {transcript}")
 
         if not transcript:
             return jsonify({"error": "Could not transcribe audio"}), 422
 
         # ── Step 3: Claude MT ─────────────────────────────────────────────────
-        print(f"[MT] Translating {source_lang} → {target_lang}...")
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
+        print(f"[MT] Translating {source_lang} → {target_lang} with Claude...")
+        client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         src_name = LANGUAGE_NAMES.get(source_lang, source_lang)
         tgt_name = LANGUAGE_NAMES.get(target_lang, target_lang)
 
@@ -104,27 +112,24 @@ def translate_speech():
         print(f"[TTS] Synthesising {target_lang} speech...")
         voice = DEEPGRAM_VOICE.get(target_lang, "aura-2-andromeda-it")
 
-        dg_response = requests.post(
+        tts_response = requests.post(
             f"https://api.deepgram.com/v1/speak?model={voice}",
             headers={
                 "Authorization": f"Token {DEEPGRAM_API_KEY}",
-                "Content-Type": "application/json",
+                "Content-Type":  "application/json",
             },
             json={"text": translation},
             timeout=30,
         )
 
-        if dg_response.status_code != 200:
-            print(f"[TTS] Deepgram error: {dg_response.status_code} {dg_response.text}")
+        if tts_response.status_code != 200:
             return jsonify({
-                "transcript":   transcript,
-                "translation":  translation,
-                "error_tts":    f"TTS failed: {dg_response.status_code}"
-            }), 200   # still return text even if TTS fails
+                "transcript":  transcript,
+                "translation": translation,
+                "error_tts":   f"TTS failed: {tts_response.status_code}",
+            }), 200
 
-        # ── Step 5: Return everything ─────────────────────────────────────────
-        import base64
-        audio_b64 = base64.b64encode(dg_response.content).decode("utf-8")
+        audio_b64 = base64.b64encode(tts_response.content).decode("utf-8")
 
         return jsonify({
             "transcript":  transcript,
