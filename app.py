@@ -1,6 +1,5 @@
 """
 AST Tool - Pure asyncio WebSocket server
-No Flask, no gunicorn, no C deps. Just websockets + requests.
 """
 
 import asyncio
@@ -10,7 +9,6 @@ import os
 import threading
 import websockets
 import websocket as ws_sync
-import websocket
 import requests
 
 ANTHROPIC_API_KEY = (
@@ -88,18 +86,20 @@ async def handle_client(client_ws):
         print(f"[WS] Config error: {e}")
         return
 
-    await client_ws.send(json.dumps({"status": "ready"}))
+    loop      = asyncio.get_event_loop()
+    dg_ready  = threading.Event()   # fires when Deepgram confirms open
+    dg_holder = [None]
+    closed    = [False]
 
-    # 2. Open Deepgram streaming connection in a background thread
     dg_url = (
         f"wss://api.deepgram.com/v1/listen"
         f"?language={source_lang}&model=nova-2&punctuate=true"
         f"&interim_results=true&endpointing=500"
     )
 
-    loop        = asyncio.get_event_loop()
-    dg_holder   = [None]
-    closed      = [False]
+    def on_dg_open(dg):
+        print("[DG] Connected")
+        dg_ready.set()   # signal that Deepgram is ready
 
     def on_dg_message(dg, message):
         if closed[0]:
@@ -141,23 +141,52 @@ async def handle_client(client_ws):
         except Exception as e:
             print(f"[DG msg] {e}")
 
+    def on_dg_error(dg, e):
+        print(f"[DG] Error: {e}")
+        dg_ready.set()   # unblock even on error
+
+    def on_dg_close(dg, c, m):
+        print("[DG] Closed")
+        dg_ready.set()   # unblock if closed before open
+
     dg_ws = ws_sync.WebSocketApp(
         dg_url,
         header={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
-        on_open=lambda dg: print("[DG] Connected"),
+        on_open=on_dg_open,
         on_message=on_dg_message,
-        on_error=lambda dg, e: print(f"[DG] Error: {e}"),
-        on_close=lambda dg, c, m: print("[DG] Closed"),
+        on_error=on_dg_error,
+        on_close=on_dg_close,
     )
     dg_holder[0] = dg_ws
-    dg_thread = threading.Thread(target=dg_ws.run_forever, kwargs={"ping_interval": 20}, daemon=True)
+
+    dg_thread = threading.Thread(
+        target=dg_ws.run_forever,
+        kwargs={"ping_interval": 20},
+        daemon=True
+    )
     dg_thread.start()
+
+    # Wait for Deepgram to confirm open (max 5s)
+    await loop.run_in_executor(None, lambda: dg_ready.wait(timeout=5))
+
+    if not dg_ws.sock or not dg_ws.sock.connected:
+        print("[WS] Deepgram failed to connect")
+        await client_ws.send(json.dumps({"error": "Could not connect to ASR service"}))
+        return
+
+    # Now tell the client we're ready
+    await client_ws.send(json.dumps({"status": "ready"}))
+    print("[WS] Sent ready to client")
 
     # 3. Forward audio client → Deepgram
     try:
         async for message in client_ws:
             if isinstance(message, bytes):
-                dg_ws.send(message, websocket.ABNF.OPCODE_BINARY)
+                try:
+                    if dg_ws.sock and dg_ws.sock.connected:
+                        dg_ws.sock.send_binary(message)
+                except Exception as e:
+                    print(f"[FWD] Error: {e}")
             else:
                 try:
                     data = json.loads(message)
@@ -176,8 +205,11 @@ async def handle_client(client_ws):
 async def main():
     port = int(os.environ.get("PORT", 5000))
     print(f"[WS] Server starting on port {port}")
-    async with websockets.serve(handle_client, "0.0.0.0", port, ping_interval=20, ping_timeout=60):
-        await asyncio.Future()  # run forever
+    async with websockets.serve(
+        handle_client, "0.0.0.0", port,
+        ping_interval=20, ping_timeout=60
+    ):
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
