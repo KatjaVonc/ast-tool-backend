@@ -10,6 +10,7 @@ import os
 import threading
 import websockets
 import websocket as ws_sync
+import websocket
 import requests
 
 ANTHROPIC_API_KEY = (
@@ -156,7 +157,7 @@ async def handle_client(client_ws):
     try:
         async for message in client_ws:
             if isinstance(message, bytes):
-                dg_ws.send_binary(message)
+                dg_ws.send(message, websocket.ABNF.OPCODE_BINARY)
             else:
                 try:
                     data = json.loads(message)
