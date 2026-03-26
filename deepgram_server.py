@@ -45,45 +45,33 @@ def translate(text, source_lang, target_lang):
 
 
 def synthesise_streaming(text, target_lang, ws):
-    """
-    Stream TTS via Deepgram REST with HTTP streaming.
-    Uses requests stream=True to send audio chunks as they arrive.
-    """
+    """Full REST TTS — clean single MP3, no chunk artifacts."""
     try:
         voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
-        print(f"[TTS] Streaming REST {voice}...", flush=True)
-
-        with requests.post(
+        print(f"[TTS] Calling {voice}...", flush=True)
+        resp = requests.post(
             f'https://api.deepgram.com/v1/speak?model={voice}',
             headers={
                 'Authorization': f'Token {DEEPGRAM_API_KEY}',
                 'Content-Type':  'application/json',
             },
             json={'text': text},
-            stream=True,
             timeout=15,
-        ) as resp:
-            if resp.status_code != 200:
-                print(f"[TTS] Error {resp.status_code}", flush=True)
-                return
-
-            chunk_index = 0
-            for chunk in resp.iter_content(chunk_size=4096):
-                if chunk:
-                    chunk_b64 = base64.b64encode(chunk).decode('utf-8')
-                    ws.send(json.dumps({
-                        'type':        'tts_chunk',
-                        'audio_b64':   chunk_b64,
-                        'audio_type':  'audio/mpeg',
-                        'chunk_index': chunk_index,
-                    }))
-                    chunk_index += 1
-
+        )
+        if resp.status_code == 200:
+            audio_b64 = base64.b64encode(resp.content).decode('utf-8')
+            ws.send(json.dumps({
+                'type':       'tts_chunk',
+                'audio_b64':  audio_b64,
+                'audio_type': 'audio/mpeg',
+                'chunk_index': 0,
+            }))
             ws.send(json.dumps({'type': 'tts_done'}))
-            print(f"[TTS] Done, {chunk_index} chunks", flush=True)
-
+            print(f"[TTS] Done {len(resp.content)} bytes", flush=True)
+        else:
+            print(f"[TTS] Error {resp.status_code}: {resp.text}", flush=True)
     except Exception as e:
-        print(f"[TTS] Stream error: {e}", flush=True)
+        print(f"[TTS] Exception: {e}", flush=True)
 
 
 @sock.route('/ws')
