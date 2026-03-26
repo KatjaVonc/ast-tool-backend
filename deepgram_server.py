@@ -13,11 +13,7 @@ CORS(app)
 sock = Sock(app)
 
 DEEPGRAM_API_KEY = os.environ.get('DEEPGRAM_API_KEY', '')
-ANTHROPIC_API_KEY = (
-    os.environ.get('ANTHROPIC_API_KEY') or
-    os.environ.get('CLAUDE_APY_KEY') or
-    os.environ.get('CLAUDE_API_KEY', '')
-)
+DEEPL_API_KEY = os.environ.get('DEEPL_API_KEY', '')
 
 LANGUAGE_NAMES = {"de": "German", "it": "Italian"}
 DEEPGRAM_VOICE  = {"it": "aura-2-livia-it", "de": "aura-2-viktoria-de"}
@@ -37,31 +33,29 @@ def health():
 
 
 def translate_with_claude(text, source_lang, target_lang):
+    """DeepL translation - fast, low latency"""
     try:
+        # DeepL language codes
+        deepl_src = source_lang.upper()  # DE, IT
+        deepl_tgt = target_lang.upper()  # DE, IT
         resp = requests.post(
-            'https://api.anthropic.com/v1/messages',
+            'https://api-free.deepl.com/v2/translate',
             headers={
-                'x-api-key':         ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01',
-                'content-type':      'application/json',
+                'Authorization': f'DeepL-Auth-Key {DEEPL_API_KEY}',
+                'Content-Type':  'application/json',
             },
             json={
-                'model':      'claude-haiku-4-5-20251001',
-                'max_tokens': 512,
-                'messages': [{
-                    'role':    'user',
-                    'content': (
-                        f"Translate this {LANGUAGE_NAMES.get(source_lang, source_lang)} "
-                        f"speech segment into {LANGUAGE_NAMES.get(target_lang, target_lang)}. "
-                        f"Preserve register and tone. Return ONLY the translation.\n\n{text}"
-                    )
-                }]
+                'text':        [text],
+                'source_lang': deepl_src,
+                'target_lang': deepl_tgt,
             },
-            timeout=10,
+            timeout=5,
         )
         if resp.status_code == 200:
-            return resp.json()['content'][0]['text'].strip()
-        print(f"[MT] Error {resp.status_code}: {resp.text}", flush=True)
+            result = resp.json()['translations'][0]['text']
+            print(f"[MT] DeepL: {result[:60]}", flush=True)
+            return result
+        print(f"[MT] DeepL error {resp.status_code}: {resp.text}", flush=True)
     except Exception as e:
         print(f"[MT] Exception: {e}", flush=True)
     return None
@@ -152,11 +146,18 @@ def websocket_endpoint(ws):
 
                         async def send_audio():
                             try:
+                                last_keepalive = asyncio.get_event_loop().time()
                                 while not stop_flag.is_set():
                                     try:
                                         audio_data = audio_queue.get(timeout=0.1)
                                         await dg_ws.send(audio_data)
+                                        last_keepalive = asyncio.get_event_loop().time()
                                     except queue.Empty:
+                                        # Send keepalive if no audio for >5s
+                                        now = asyncio.get_event_loop().time()
+                                        if now - last_keepalive > 5:
+                                            await dg_ws.send(json.dumps({"type": "KeepAlive"}))
+                                            last_keepalive = now
                                         await asyncio.sleep(0.01)
                             except Exception as e:
                                 print(f"Send error: {e}", flush=True)
