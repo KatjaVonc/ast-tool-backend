@@ -20,7 +20,7 @@ ANTHROPIC_API_KEY = (
 )
 
 LANGUAGE_NAMES = {"de": "German", "it": "Italian"}
-DEEPGRAM_VOICE  = {"it": "aura-arcas-en", "de": "aura-arcas-en"}
+DEEPGRAM_VOICE  = {"it": "aura-2-livia-it", "de": "aura-2-viktoria-de"}
 
 @app.route('/')
 def home():
@@ -69,7 +69,7 @@ def translate_with_claude(text, source_lang, target_lang):
 
 def synthesise_speech(text, target_lang):
     try:
-        voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-andromeda-it')
+        voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
         print(f"[TTS] Calling Deepgram voice={voice} text_len={len(text)}", flush=True)
         resp = requests.post(
             f'https://api.deepgram.com/v1/speak?model={voice}',
