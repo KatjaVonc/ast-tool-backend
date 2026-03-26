@@ -13,7 +13,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_APY_KEY") or os.environ.get("CLAUDE_API_KEY")
 DEEPGRAM_API_KEY  = os.environ.get("DEEPGRAM_API_KEY")
 
 LANGUAGE_NAMES = {"de": "German", "it": "Italian"}
