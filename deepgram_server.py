@@ -58,9 +58,9 @@ def translate(text, source_lang, target_lang, engine="deepl"):
                 json={
                     'model': 'claude-haiku-4-5-20251001',
                     'max_tokens': 512,
-                    'messages': [{'role': 'user', 'content': f'Translate this {from_name} speech into {to_name}. Preserve register and tone. Return ONLY the translation.
+                    'messages': [{'role': 'user', 'content': ('Translate this ' + from_name + ' speech into ' + to_name + '. Preserve register and tone. Return ONLY the translation.\n\n' + text)}],
 
-{text}'}]
+
                 },
                 timeout=10,
             )
