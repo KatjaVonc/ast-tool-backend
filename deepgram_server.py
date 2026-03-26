@@ -20,7 +20,7 @@ ANTHROPIC_API_KEY = (
 )
 
 LANGUAGE_NAMES = {"de": "German", "it": "Italian"}
-DEEPGRAM_VOICE  = {"it": "aura-2-andromeda-it", "de": "aura-2-thalia-de"}
+DEEPGRAM_VOICE  = {"it": "aura-arcas-en", "de": "aura-arcas-en"}
 
 @app.route('/')
 def home():
@@ -70,6 +70,7 @@ def translate_with_claude(text, source_lang, target_lang):
 def synthesise_speech(text, target_lang):
     try:
         voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-andromeda-it')
+        print(f"[TTS] Calling Deepgram voice={voice} text_len={len(text)}", flush=True)
         resp = requests.post(
             f'https://api.deepgram.com/v1/speak?model={voice}',
             headers={
@@ -79,7 +80,9 @@ def synthesise_speech(text, target_lang):
             json={'text': text},
             timeout=15,
         )
+        print(f"[TTS] Response status: {resp.status_code}", flush=True)
         if resp.status_code == 200:
+            print(f"[TTS] Success, audio bytes: {len(resp.content)}", flush=True)
             return base64.b64encode(resp.content).decode('utf-8')
         print(f"[TTS] Error {resp.status_code}: {resp.text}", flush=True)
     except Exception as e:
