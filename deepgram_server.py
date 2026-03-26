@@ -135,7 +135,6 @@ def websocket_endpoint(ws):
                     f"&punctuate=true"
                     f"&interim_results=true"
                     f"&endpointing=200"
-                    f"&utterance_end_ms=800"
                     f"&encoding=linear16"
                     f"&sample_rate=16000"
                 )
