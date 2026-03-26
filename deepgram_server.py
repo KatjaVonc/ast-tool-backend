@@ -15,7 +15,15 @@ sock = Sock(app)
 DEEPGRAM_API_KEY = os.environ.get('DEEPGRAM_API_KEY', '')
 DEEPL_API_KEY    = os.environ.get('DEEPL_API_KEY', '')
 
-DEEPGRAM_VOICE = {"it": "aura-2-livia-it", "de": "aura-2-viktoria-de"}
+DEEPGRAM_VOICE   = {"it": "aura-2-livia-it", "de": "aura-2-viktoria-de"}
+ANTHROPIC_API_KEY = (
+    os.environ.get("ANTHROPIC_API_KEY") or
+    os.environ.get("CLAUDE_APY_KEY") or
+    os.environ.get("CLAUDE_API_KEY", "")
+)
+AZURE_KEY         = os.environ.get("AZURE_TRANSLATOR_KEY", "")
+AZURE_REGION      = os.environ.get("AZURE_REGION", "westeurope")
+GOOGLE_KEY        = os.environ.get("GOOGLE_TRANSLATE_KEY", "")
 
 @app.route('/')
 def home():
@@ -26,21 +34,73 @@ def health():
     return {'status': 'healthy'}
 
 
-def translate(text, source_lang, target_lang):
+def translate(text, source_lang, target_lang, engine="deepl"):
     try:
-        resp = requests.post(
-            'https://api-free.deepl.com/v2/translate',
-            headers={'Authorization': f'DeepL-Auth-Key {DEEPL_API_KEY}', 'Content-Type': 'application/json'},
-            json={'text': [text], 'source_lang': source_lang.upper(), 'target_lang': target_lang.upper()},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            result = resp.json()['translations'][0]['text']
-            print(f"[MT] {result[:80]}", flush=True)
-            return result
-        print(f"[MT] DeepL error {resp.status_code}: {resp.text}", flush=True)
+        if engine == "deepl":
+            resp = requests.post(
+                'https://api-free.deepl.com/v2/translate',
+                headers={'Authorization': f'DeepL-Auth-Key {DEEPL_API_KEY}', 'Content-Type': 'application/json'},
+                json={'text': [text], 'source_lang': source_lang.upper(), 'target_lang': target_lang.upper()},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                result = resp.json()['translations'][0]['text']
+                print(f"[MT/DeepL] {result[:80]}", flush=True)
+                return result
+            print(f"[MT/DeepL] Error {resp.status_code}: {resp.text}", flush=True)
+
+        elif engine == "claude":
+            from_name = {"de": "German", "it": "Italian"}.get(source_lang, source_lang)
+            to_name   = {"de": "German", "it": "Italian"}.get(target_lang, target_lang)
+            resp = requests.post(
+                'https://api.anthropic.com/v1/messages',
+                headers={'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
+                json={
+                    'model': 'claude-haiku-4-5-20251001',
+                    'max_tokens': 512,
+                    'messages': [{'role': 'user', 'content': f'Translate this {from_name} speech into {to_name}. Preserve register and tone. Return ONLY the translation.
+
+{text}'}]
+                },
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                result = resp.json()['content'][0]['text'].strip()
+                print(f"[MT/Claude] {result[:80]}", flush=True)
+                return result
+            print(f"[MT/Claude] Error {resp.status_code}", flush=True)
+
+        elif engine == "google":
+            resp = requests.post(
+                f'https://translation.googleapis.com/language/translate/v2?key={GOOGLE_KEY}',
+                json={'q': text, 'source': source_lang, 'target': target_lang, 'format': 'text'},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                result = resp.json()['data']['translations'][0]['translatedText']
+                print(f"[MT/Google] {result[:80]}", flush=True)
+                return result
+            print(f"[MT/Google] Error {resp.status_code}: {resp.text}", flush=True)
+
+        elif engine == "azure":
+            resp = requests.post(
+                f'https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&from={source_lang}&to={target_lang}',
+                headers={
+                    'Ocp-Apim-Subscription-Key': AZURE_KEY,
+                    'Ocp-Apim-Subscription-Region': AZURE_REGION,
+                    'Content-Type': 'application/json',
+                },
+                json=[{'text': text}],
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                result = resp.json()[0]['translations'][0]['text']
+                print(f"[MT/Azure] {result[:80]}", flush=True)
+                return result
+            print(f"[MT/Azure] Error {resp.status_code}: {resp.text}", flush=True)
+
     except Exception as e:
-        print(f"[MT] Exception: {e}", flush=True)
+        print(f"[MT/{engine}] Exception: {e}", flush=True)
     return None
 
 
@@ -83,7 +143,8 @@ def websocket_endpoint(ws):
         config      = json.loads(config_msg)
         source_lang = config.get('source_lang', 'de')
         target_lang = config.get('target_lang', 'it')
-        print(f"[WS] {source_lang} → {target_lang}", flush=True)
+        mt_engine   = config.get('mt_engine', 'deepl')
+        print(f"[WS] {source_lang} → {target_lang} via {mt_engine}", flush=True)
         ws.send(json.dumps({'status': 'ready'}))
 
         audio_queue = queue.Queue(maxsize=100)
@@ -178,7 +239,7 @@ def websocket_endpoint(ws):
                                         }))
                                     else:
                                         print(f"[ASR] {transcript}", flush=True)
-                                        translation = translate(transcript, source_lang, target_lang)
+                                        translation = translate(transcript, source_lang, target_lang, mt_engine)
                                         if not translation:
                                             ws.send(json.dumps({'transcript': transcript, 'is_final': True}))
                                             continue
