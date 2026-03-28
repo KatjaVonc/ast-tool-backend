@@ -7,6 +7,8 @@ import threading
 import queue
 import requests
 import base64
+import re
+from num2words import num2words
 
 app = Flask(__name__)
 CORS(app)
@@ -16,6 +18,25 @@ DEEPGRAM_API_KEY = os.environ.get('DEEPGRAM_API_KEY', '')
 DEEPL_API_KEY    = os.environ.get('DEEPL_API_KEY', '')
 
 DEEPGRAM_VOICE   = {"it": "aura-2-livia-it", "de": "aura-2-viktoria-de"}
+
+def convert_numbers_to_words(text, lang):
+    """Replace digit sequences with spoken words so TTS reads them naturally."""
+    lang_code = {"it": "it", "de": "de"}.get(lang, "en")
+
+    def replace_number(match):
+        num_str = match.group(0).replace(",", "").replace(".", "")
+        try:
+            # Handle decimals
+            if "." in match.group(0) or "," in match.group(0):
+                num = float(match.group(0).replace(",", "."))
+            else:
+                num = int(num_str)
+            return num2words(num, lang=lang_code)
+        except:
+            return match.group(0)
+
+    # Match integers and decimals (e.g. 1000000, 3.5, 2,5)
+    return re.sub(r'\d[\d,.]*', replace_number, text)
 ANTHROPIC_API_KEY = (
     os.environ.get("ANTHROPIC_API_KEY") or
     os.environ.get("CLAUDE_APY_KEY") or
@@ -109,6 +130,9 @@ def synthesise_streaming(text, target_lang, ws):
     try:
         voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
         print(f"[TTS] Calling {voice}...", flush=True)
+        # Convert digits to words for natural TTS reading
+        text = convert_numbers_to_words(text, target_lang)
+
         resp = requests.post(
             f'https://api.deepgram.com/v1/speak?model={voice}',
             headers={
