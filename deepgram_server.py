@@ -24,21 +24,12 @@ def convert_numbers_to_words(text, lang):
     lang_code = {"it": "it", "de": "de"}.get(lang, "en")
 
     def replace_number(match):
-        num_str = match.group(0)
-        # Remove European thousand separators (1.000.000 or 1,000,000)
-        clean = num_str.replace(".", "").replace(",", "").replace(" ", "")
         try:
-            num = int(clean)
-            return num2words(num, lang=lang_code)
+            return num2words(int(match.group(0)), lang=lang_code)
         except:
-            try:
-                num = float(num_str.replace(",", "."))
-                return num2words(num, lang=lang_code)
-            except:
-                return num_str
+            return match.group(0)
 
-    # Match integers with optional European thousand separators
-    return re.sub(r'\d[\d.,\s]*\d|\d', replace_number, text)
+    return re.sub(r'\d+', replace_number, text)
 ANTHROPIC_API_KEY = (
     os.environ.get("ANTHROPIC_API_KEY") or
     os.environ.get("CLAUDE_APY_KEY") or
