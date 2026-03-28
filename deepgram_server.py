@@ -48,7 +48,7 @@ def health():
     return {'status': 'healthy'}
 
 
-def translate(text, source_lang, target_lang, engine="deepl"):
+def translate(text, source_lang, target_lang, engine="deepl", context_brief=""):
     try:
         if engine == "deepl":
             resp = requests.post(
@@ -72,7 +72,13 @@ def translate(text, source_lang, target_lang, engine="deepl"):
                 json={
                     'model': 'claude-haiku-4-5-20251001',
                     'max_tokens': 512,
-                    'system': ('You are a simultaneous interpreter. Translate ' + from_name + ' to ' + to_name + '. Output ONLY the translation, never explanations or refusals. If a segment is incomplete, translate it literally anyway. Preserve register and tone.'),
+                    'system': (
+                        'You are a simultaneous interpreter. Translate ' + from_name + ' to ' + to_name + '. '
+                        'Output ONLY the translation, never explanations or refusals. '
+                        'If a segment is incomplete, translate it literally anyway. '
+                        'Preserve register and tone.'
+                        + (('\n\nSession context:\n' + context_brief) if context_brief else '')
+                    ),
                     'messages': [{'role': 'user', 'content': text}],
                 },
                 timeout=10,
@@ -160,10 +166,13 @@ def websocket_endpoint(ws):
     try:
         config_msg  = ws.receive()
         config      = json.loads(config_msg)
-        source_lang = config.get('source_lang', 'de')
-        target_lang = config.get('target_lang', 'it')
-        mt_engine   = config.get('mt_engine', 'deepl')
+        source_lang    = config.get('source_lang', 'de')
+        target_lang    = config.get('target_lang', 'it')
+        mt_engine      = config.get('mt_engine', 'deepl')
+        context_brief  = config.get('context_brief', '').strip()
         print(f"[WS] {source_lang} → {target_lang} via {mt_engine}", flush=True)
+        if context_brief:
+            print(f"[WS] Context brief: {context_brief[:80]}...", flush=True)
         ws.send(json.dumps({'status': 'ready'}))
 
         audio_queue = queue.Queue(maxsize=100)
@@ -261,7 +270,7 @@ def websocket_endpoint(ws):
                                         }))
                                     else:
                                         print(f"[ASR] {transcript}", flush=True)
-                                        translation = translate(transcript, source_lang, target_lang, mt_engine)
+                                        translation = translate(transcript, source_lang, target_lang, mt_engine, context_brief)
                                         if not translation:
                                             # MT failed but keep going - send transcript anyway
                                             ws.send(json.dumps({'transcript': transcript, 'translation': '[MT error]', 'is_final': True}))
