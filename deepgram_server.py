@@ -24,19 +24,21 @@ def convert_numbers_to_words(text, lang):
     lang_code = {"it": "it", "de": "de"}.get(lang, "en")
 
     def replace_number(match):
-        num_str = match.group(0).replace(",", "").replace(".", "")
+        num_str = match.group(0)
+        # Remove European thousand separators (1.000.000 or 1,000,000)
+        clean = num_str.replace(".", "").replace(",", "").replace(" ", "")
         try:
-            # Handle decimals
-            if "." in match.group(0) or "," in match.group(0):
-                num = float(match.group(0).replace(",", "."))
-            else:
-                num = int(num_str)
+            num = int(clean)
             return num2words(num, lang=lang_code)
         except:
-            return match.group(0)
+            try:
+                num = float(num_str.replace(",", "."))
+                return num2words(num, lang=lang_code)
+            except:
+                return num_str
 
-    # Match integers and decimals (e.g. 1000000, 3.5, 2,5)
-    return re.sub(r'\d[\d,.]*', replace_number, text)
+    # Match integers with optional European thousand separators
+    return re.sub(r'\d[\d.,\s]*\d|\d', replace_number, text)
 ANTHROPIC_API_KEY = (
     os.environ.get("ANTHROPIC_API_KEY") or
     os.environ.get("CLAUDE_APY_KEY") or
@@ -131,7 +133,10 @@ def synthesise_streaming(text, target_lang, ws):
         voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
         print(f"[TTS] Calling {voice}...", flush=True)
         # Convert digits to words for natural TTS reading
+        text_before = text
         text = convert_numbers_to_words(text, target_lang)
+        if text != text_before:
+            print(f"[NUM] {text_before!r} -> {text!r}", flush=True)
 
         resp = requests.post(
             f'https://api.deepgram.com/v1/speak?model={voice}',
