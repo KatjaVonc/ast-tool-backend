@@ -208,8 +208,11 @@ def websocket_endpoint(ws):
                                         last_keepalive = asyncio.get_event_loop().time()
                                     except queue.Empty:
                                         now = asyncio.get_event_loop().time()
-                                        if now - last_keepalive > 5:
-                                            await dg_ws.send(json.dumps({"type": "KeepAlive"}))
+                                        if now - last_keepalive > 8:
+                                            try:
+                                                await dg_ws.send(json.dumps({"type": "KeepAlive"}))
+                                            except:
+                                                pass
                                             last_keepalive = now
                                         await asyncio.sleep(0.01)
                             except Exception as e:
@@ -241,7 +244,8 @@ def websocket_endpoint(ws):
                                         print(f"[ASR] {transcript}", flush=True)
                                         translation = translate(transcript, source_lang, target_lang, mt_engine)
                                         if not translation:
-                                            ws.send(json.dumps({'transcript': transcript, 'is_final': True}))
+                                            # MT failed but keep going - send transcript anyway
+                                            ws.send(json.dumps({'transcript': transcript, 'translation': '[MT error]', 'is_final': True}))
                                             continue
 
                                         # Send text immediately — don't wait for TTS
