@@ -48,13 +48,14 @@ def health():
     return {'status': 'healthy'}
 
 
-def translate(text, source_lang, target_lang, engine="deepl", context_brief=""):
+def translate(text, source_lang, target_lang, engine="deepl", context_brief="", formality="default"):
     try:
         if engine == "deepl":
             resp = requests.post(
                 'https://api-free.deepl.com/v2/translate',
                 headers={'Authorization': f'DeepL-Auth-Key {DEEPL_API_KEY}', 'Content-Type': 'application/json'},
-                json={'text': [text], 'source_lang': source_lang.upper(), 'target_lang': target_lang.upper()},
+                json={'text': [text], 'source_lang': source_lang.upper(), 'target_lang': target_lang.upper(),
+                   **(({'formality': formality}) if formality != 'default' else {})},
                 timeout=5,
             )
             if resp.status_code == 200:
@@ -170,6 +171,7 @@ def websocket_endpoint(ws):
         target_lang    = config.get('target_lang', 'it')
         mt_engine      = config.get('mt_engine', 'deepl')
         context_brief  = config.get('context_brief', '').strip()
+        formality      = config.get('formality', 'default')
         print(f"[WS] {source_lang} → {target_lang} via {mt_engine}", flush=True)
         if context_brief:
             print(f"[WS] Context brief: {context_brief[:80]}...", flush=True)
@@ -270,7 +272,7 @@ def websocket_endpoint(ws):
                                         }))
                                     else:
                                         print(f"[ASR] {transcript}", flush=True)
-                                        translation = translate(transcript, source_lang, target_lang, mt_engine, context_brief)
+                                        translation = translate(transcript, source_lang, target_lang, mt_engine, context_brief, formality)
                                         if not translation:
                                             # MT failed but keep going - send transcript anyway
                                             ws.send(json.dumps({'transcript': transcript, 'translation': '[MT error]', 'is_final': True}))
