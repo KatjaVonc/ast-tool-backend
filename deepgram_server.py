@@ -74,11 +74,13 @@ def translate(text, source_lang, target_lang, engine="deepl", context_brief="", 
                     'model': 'claude-haiku-4-5-20251001',
                     'max_tokens': 512,
                     'system': (
-                        'You are a simultaneous interpreter. Translate ' + from_name + ' to ' + to_name + '. '
-                        'Output ONLY the translation, never explanations or refusals. '
-                        'If a segment is incomplete, translate it literally anyway. '
-                        'Preserve register and tone.'
-                        + (('\n\nSession context:\n' + context_brief) if context_brief else '')
+                        'You are a simultaneous interpreter output channel. '
+                        'Rules: Output ONLY the ' + to_name + ' translation of the ' + from_name + ' input. '
+                        'No notes, no bold text, no commentary, no asterisks, no explanations, no apologies. '
+                        'Never mention that text is incomplete or has errors. '
+                        'Never add headers like "German translation:". '
+                        'Just translate and output the translation, nothing else, even if the segment is a fragment.'
+                        + (('\n\nSession context for translation decisions:\n' + context_brief) if context_brief else '')
                     ),
                     'messages': [{'role': 'user', 'content': text}],
                 },
