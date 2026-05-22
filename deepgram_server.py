@@ -36,6 +36,7 @@ ANTHROPIC_API_KEY = (
     os.environ.get("CLAUDE_API_KEY", "")
 )
 AZURE_KEY         = os.environ.get("AZURE_TRANSLATOR_KEY", "")
+AZURE_SPEECH_KEY  = os.environ.get("AZURE_SPEECH_KEY", "")
 AZURE_REGION      = os.environ.get("AZURE_REGION", "westeurope")
 GOOGLE_KEY        = os.environ.get("GOOGLE_TRANSLATE_KEY", "")
 
@@ -181,7 +182,7 @@ def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
             # Get Azure TTS token
             token_resp = requests.post(
                 f'https://{AZURE_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken',
-                headers={'Ocp-Apim-Subscription-Key': AZURE_KEY},
+                headers={'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY},
                 timeout=10,
             )
             if token_resp.status_code != 200:
