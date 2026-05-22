@@ -274,6 +274,11 @@ def websocket_endpoint(ws):
                                         }))
                                     else:
                                         print(f"[ASR] {transcript}", flush=True)
+                                        # Skip segments shorter than 4 words
+                                        if len(transcript.split()) < 4:
+                                            print(f"[ASR] Skipping short segment ({len(transcript.split())} words)", flush=True)
+                                            ws.send(json.dumps({'transcript': transcript, 'is_final': True}))
+                                            continue
                                         translation = translate(transcript, source_lang, target_lang, mt_engine, context_brief, formality)
                                         if not translation:
                                             # MT failed but keep going - send transcript anyway
