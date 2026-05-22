@@ -126,38 +126,97 @@ def translate(text, source_lang, target_lang, engine="deepl", context_brief="", 
     return None
 
 
-def synthesise_streaming(text, target_lang, ws):
-    """Full REST TTS — clean single MP3, no chunk artifacts."""
+# TTS voice config
+GOOGLE_TTS_VOICE = {"it": "it-IT-Neural2-A", "de": "de-DE-Neural2-F"}
+AZURE_TTS_VOICE  = {"it": "it-IT-ElsaNeural", "de": "de-DE-KatjaNeural"}
+
+
+def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
+    """Full REST TTS — clean single MP3."""
     try:
-        voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
-        print(f"[TTS] Calling {voice}...", flush=True)
-        # Convert digits to words for natural TTS reading
+        # Convert digits to words
         text_before = text
         text = convert_numbers_to_words(text, target_lang)
         if text != text_before:
             print(f"[NUM] {text_before!r} -> {text!r}", flush=True)
 
-        resp = requests.post(
-            f'https://api.deepgram.com/v1/speak?model={voice}',
-            headers={
-                'Authorization': f'Token {DEEPGRAM_API_KEY}',
-                'Content-Type':  'application/json',
-            },
-            json={'text': text},
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            audio_b64 = base64.b64encode(resp.content).decode('utf-8')
+        audio_bytes = None
+
+        if tts_engine == "deepgram":
+            voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
+            print(f"[TTS/Deepgram] {voice}...", flush=True)
+            resp = requests.post(
+                f'https://api.deepgram.com/v1/speak?model={voice}',
+                headers={'Authorization': f'Token {DEEPGRAM_API_KEY}', 'Content-Type': 'application/json'},
+                json={'text': text},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                audio_bytes = resp.content
+            else:
+                print(f"[TTS/Deepgram] Error {resp.status_code}: {resp.text}", flush=True)
+
+        elif tts_engine == "google":
+            voice = GOOGLE_TTS_VOICE.get(target_lang, 'it-IT-Neural2-A')
+            lang_code = 'it-IT' if target_lang == 'it' else 'de-DE'
+            print(f"[TTS/Google] {voice}...", flush=True)
+            resp = requests.post(
+                f'https://texttospeech.googleapis.com/v1/text:synthesize?key={GOOGLE_KEY}',
+                json={
+                    'input': {'text': text},
+                    'voice': {'languageCode': lang_code, 'name': voice},
+                    'audioConfig': {'audioEncoding': 'MP3', 'speakingRate': 1.0}
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                audio_bytes = base64.b64decode(resp.json()['audioContent'])
+            else:
+                print(f"[TTS/Google] Error {resp.status_code}: {resp.text}", flush=True)
+
+        elif tts_engine == "azure":
+            voice = AZURE_TTS_VOICE.get(target_lang, 'it-IT-ElsaNeural')
+            lang_code = 'it-IT' if target_lang == 'it' else 'de-DE'
+            print(f"[TTS/Azure] {voice}...", flush=True)
+            # Get Azure TTS token
+            token_resp = requests.post(
+                f'https://{AZURE_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken',
+                headers={'Ocp-Apim-Subscription-Key': AZURE_KEY},
+                timeout=10,
+            )
+            if token_resp.status_code != 200:
+                print(f"[TTS/Azure] Token error {token_resp.status_code}", flush=True)
+            else:
+                token = token_resp.text
+                ssml = f"""<speak version='1.0' xml:lang='{lang_code}'>
+                    <voice name='{voice}'>{text}</voice>
+                </speak>"""
+                tts_resp = requests.post(
+                    f'https://{AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1',
+                    headers={
+                        'Authorization': f'Bearer {token}',
+                        'Content-Type': 'application/ssml+xml',
+                        'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3',
+                    },
+                    data=ssml.encode('utf-8'),
+                    timeout=15,
+                )
+                if tts_resp.status_code == 200:
+                    audio_bytes = tts_resp.content
+                else:
+                    print(f"[TTS/Azure] Error {tts_resp.status_code}: {tts_resp.text}", flush=True)
+
+        if audio_bytes:
+            audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
             ws.send(json.dumps({
-                'type':       'tts_chunk',
-                'audio_b64':  audio_b64,
-                'audio_type': 'audio/mpeg',
+                'type':        'tts_chunk',
+                'audio_b64':   audio_b64,
+                'audio_type':  'audio/mpeg',
                 'chunk_index': 0,
             }))
             ws.send(json.dumps({'type': 'tts_done'}))
-            print(f"[TTS] Done {len(resp.content)} bytes", flush=True)
-        else:
-            print(f"[TTS] Error {resp.status_code}: {resp.text}", flush=True)
+            print(f"[TTS] Done {len(audio_bytes)} bytes", flush=True)
+
     except Exception as e:
         print(f"[TTS] Exception: {e}", flush=True)
 
@@ -174,6 +233,7 @@ def websocket_endpoint(ws):
         mt_engine      = config.get('mt_engine', 'deepl')
         context_brief  = config.get('context_brief', '').strip()
         formality      = config.get('formality', 'default')
+        tts_engine     = config.get('tts_engine', 'deepgram')
         print(f"[WS] {source_lang} → {target_lang} via {mt_engine}", flush=True)
         if context_brief:
             print(f"[WS] Context brief: {context_brief[:80]}...", flush=True)
@@ -295,7 +355,7 @@ def websocket_endpoint(ws):
                                         # Stream TTS in a separate thread so ASR keeps running
                                         tts_thread = threading.Thread(
                                             target=synthesise_streaming,
-                                            args=(translation, target_lang, ws),
+                                            args=(translation, target_lang, ws, tts_engine),
                                             daemon=True
                                         )
                                         tts_thread.start()
