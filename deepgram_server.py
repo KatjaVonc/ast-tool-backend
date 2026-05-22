@@ -207,15 +207,20 @@ def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
                     print(f"[TTS/Azure] Error {tts_resp.status_code}: {tts_resp.text}", flush=True)
 
         if audio_bytes:
-            audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-            ws.send(json.dumps({
-                'type':        'tts_chunk',
-                'audio_b64':   audio_b64,
-                'audio_type':  'audio/mpeg',
-                'chunk_index': 0,
-            }))
-            ws.send(json.dumps({'type': 'tts_done'}))
-            print(f"[TTS] Done {len(audio_bytes)} bytes", flush=True)
+            try:
+                audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                ws.send(json.dumps({
+                    'type':        'tts_chunk',
+                    'audio_b64':   audio_b64,
+                    'audio_type':  'audio/mpeg',
+                    'chunk_index': 0,
+                }))
+                ws.send(json.dumps({'type': 'tts_done'}))
+                print(f"[TTS] Done {len(audio_bytes)} bytes", flush=True)
+            except Exception as send_e:
+                print(f"[TTS] Send error: {send_e}", flush=True)
+        else:
+            print(f"[TTS] No audio produced, skipping", flush=True)
 
     except Exception as e:
         print(f"[TTS] Exception: {e}", flush=True)
