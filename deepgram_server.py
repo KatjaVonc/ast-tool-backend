@@ -74,6 +74,7 @@ def translate(text, source_lang, target_lang, engine="deepl", context_brief="", 
                 json={
                     'model': 'claude-haiku-4-5-20251001',
                     'max_tokens': 512,
+                    'temperature': 0,
                     'system': (
                         'You are a simultaneous interpreter output channel. '
                         'Rules: Output ONLY the ' + to_name + ' translation of the ' + from_name + ' input. '
