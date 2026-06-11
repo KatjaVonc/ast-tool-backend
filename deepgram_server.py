@@ -39,6 +39,8 @@ AZURE_KEY         = os.environ.get("AZURE_TRANSLATOR_KEY", "")
 AZURE_SPEECH_KEY  = os.environ.get("AZURE_SPEECH_KEY", "")
 AZURE_REGION      = os.environ.get("AZURE_REGION", "westeurope")
 GOOGLE_KEY        = os.environ.get("GOOGLE_TRANSLATE_KEY", "")
+GOOGLE_AI_KEY     = os.environ.get("GOOGLE_AI_KEY", "")
+GOOGLE_AI_KEY     = os.environ.get("GOOGLE_AI_KEY", "")
 
 @app.route('/')
 def home():
