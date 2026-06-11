@@ -325,6 +325,9 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
                                 ot = sc.get("outputTranscription", {})
                                 if ot.get("text"):
                                     output_buf += ot["text"]
+                                    # Send translation text as it arrives so the
+                                    # frontend can display it incrementally
+                                    ws.send(json.dumps({"translation": output_buf, "is_final": False, "mode": "gemini"}))
 
                                 mt = sc.get("modelTurn", {})
                                 for part in mt.get("parts", []):
