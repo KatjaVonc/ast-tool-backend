@@ -30,6 +30,7 @@ def convert_numbers_to_words(text, lang):
             return match.group(0)
 
     return re.sub(r'\d+', replace_number, text)
+
 ANTHROPIC_API_KEY = (
     os.environ.get("ANTHROPIC_API_KEY") or
     os.environ.get("CLAUDE_APY_KEY") or
@@ -39,7 +40,6 @@ AZURE_KEY         = os.environ.get("AZURE_TRANSLATOR_KEY", "")
 AZURE_SPEECH_KEY  = os.environ.get("AZURE_SPEECH_KEY", "")
 AZURE_REGION      = os.environ.get("AZURE_REGION", "westeurope")
 GOOGLE_KEY        = os.environ.get("GOOGLE_TRANSLATE_KEY", "")
-GOOGLE_AI_KEY     = os.environ.get("GOOGLE_AI_KEY", "")
 GOOGLE_AI_KEY     = os.environ.get("GOOGLE_AI_KEY", "")
 
 @app.route('/')
@@ -231,7 +231,7 @@ def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
 
 
 def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
-    """End-to-end mode: stream audio directly to Gemini 3.5 Live Translate."""
+    """End-to-end mode: stream audio directly to Gemini Live Translate."""
     import websockets
     import asyncio
 
@@ -266,22 +266,23 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
 
     async def _gemini_stream():
         url = (
-            f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+            f"wss://generativelanguage.googleapis.com/ws/"
+            f"google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
             f"?key={api_key}"
         )
 
-        # Correct setup format per Google docs (WebSocket v1beta)
+        # Correct setup format for raw WebSocket:
+        # inputAudioTranscription, outputAudioTranscription, and translationConfig
+        # are top-level fields inside "config", NOT nested inside "generationConfig".
         setup_msg = {
-            "setup": {
+            "config": {
                 "model": "models/gemini-3.5-live-translate-preview",
-                "generationConfig": {
-                    "responseModalities": ["AUDIO"],
-                    "inputAudioTranscription": {},
-                    "outputAudioTranscription": {},
-                    "translationConfig": {
-                        "targetLanguageCode": target_code,
-                        "echoTargetLanguage": False
-                    }
+                "responseModalities": ["AUDIO"],
+                "inputAudioTranscription": {},
+                "outputAudioTranscription": {},
+                "translationConfig": {
+                    "targetLanguageCode": target_code,
+                    "echoTargetLanguage": False
                 }
             }
         }
@@ -297,13 +298,15 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
                         while not stop_flag_g.is_set():
                             try:
                                 audio_data = audio_queue_g.get(timeout=0.1)
-                                # Correct format per Google docs
+                                # Correct raw WebSocket audio format: mediaChunks array
                                 msg = {
                                     "realtimeInput": {
-                                        "audio": {
-                                            "data": base64.b64encode(audio_data).decode('utf-8'),
-                                            "mimeType": "audio/pcm;rate=16000"
-                                        }
+                                        "mediaChunks": [
+                                            {
+                                                "data": base64.b64encode(audio_data).decode('utf-8'),
+                                                "mimeType": "audio/pcm;rate=16000"
+                                            }
+                                        ]
                                     }
                                 }
                                 await gemini_ws.send(json.dumps(msg))
@@ -484,7 +487,7 @@ def websocket_endpoint(ws):
                                         }))
                                     else:
                                         print(f"[ASR] {transcript}", flush=True)
-                                        # Skip segments shorter than 4 words
+                                        # Skip segments shorter than 3 words
                                         if len(transcript.split()) < 3:
                                             print(f"[ASR] Skipping short segment ({len(transcript.split())} words)", flush=True)
                                             ws.send(json.dumps({'transcript': transcript, 'is_final': True}))
