@@ -266,27 +266,28 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
 
     async def _gemini_stream():
         url = (
-            f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
+            f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
             f"?key={api_key}"
         )
 
-        # Correct setup format for Gemini Live Translate
+        # Correct setup format per Google docs (WebSocket v1beta)
         setup_msg = {
             "setup": {
                 "model": "models/gemini-3.5-live-translate-preview",
-                "generation_config": {
-                    "response_modalities": ["AUDIO"],
-                    "translation_config": {
-                        "target_language_code": target_code
-                    },
-                    "input_audio_transcription": {},
-                    "output_audio_transcription": {}
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "inputAudioTranscription": {},
+                    "outputAudioTranscription": {},
+                    "translationConfig": {
+                        "targetLanguageCode": target_code,
+                        "echoTargetLanguage": False
+                    }
                 }
             }
         }
 
         try:
-            async with websockets.connect(url, additional_headers={}, ping_interval=20) as gemini_ws:
+            async with websockets.connect(url, ping_interval=20) as gemini_ws:
                 print("[Gemini] Connected", flush=True)
                 await gemini_ws.send(json.dumps(setup_msg))
                 print("[Gemini] Setup sent", flush=True)
@@ -296,12 +297,13 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
                         while not stop_flag_g.is_set():
                             try:
                                 audio_data = audio_queue_g.get(timeout=0.1)
+                                # Correct format per Google docs
                                 msg = {
-                                    "realtime_input": {
-                                        "media_chunks": [{
+                                    "realtimeInput": {
+                                        "audio": {
                                             "data": base64.b64encode(audio_data).decode('utf-8'),
-                                            "mime_type": "audio/pcm;rate=16000"
-                                        }]
+                                            "mimeType": "audio/pcm;rate=16000"
+                                        }
                                     }
                                 }
                                 await gemini_ws.send(json.dumps(msg))
