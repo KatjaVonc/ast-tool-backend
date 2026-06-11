@@ -233,10 +233,8 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
     import websockets
     import asyncio
 
-    # BCP-47 codes required by translationConfig.targetLanguageCode
-    LANG_CODES = {"it": "it-IT", "de": "de-DE", "en": "en-US"}
-    target_code = LANG_CODES.get(target_lang, target_lang)
-
+    # Short BCP-47 codes as used in Google's own examples ("pl", "es", "de", "it")
+    # NOT locale variants like "it-IT" or "de-DE"
     print(f"[Gemini] Starting Live Translate {source_lang} → {target_lang}", flush=True)
 
     audio_queue_g = queue.Queue(maxsize=200)
@@ -270,23 +268,20 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
             f"?key={api_key}"
         )
 
-        # Proto-confirmed field placement (IBidiGenerateContentSetup, v1beta):
-        # - inputAudioTranscription  → direct field of setup
-        # - outputAudioTranscription → direct field of setup
-        # - translationConfig        → inside generationConfig (model-specific extension)
-        # - responseModalities       → inside generationConfig
+        # All four fields inside generationConfig as shown in the official JS WebSocket example.
+        # targetLanguageCode uses short BCP-47 codes ("it", "de"), not locale variants ("it-IT").
         setup_msg = {
             "setup": {
                 "model": "models/gemini-3.5-live-translate-preview",
                 "generationConfig": {
                     "responseModalities": ["AUDIO"],
+                    "inputAudioTranscription": {},
+                    "outputAudioTranscription": {},
                     "translationConfig": {
-                        "targetLanguageCode": target_code,
+                        "targetLanguageCode": target_lang,  # "it" or "de" directly
                         "echoTargetLanguage": False
                     }
-                },
-                "inputAudioTranscription": {},
-                "outputAudioTranscription": {}
+                }
             }
         }
 
