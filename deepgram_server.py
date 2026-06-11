@@ -228,7 +228,7 @@ def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
         print(f"[TTS] Exception: {e}", flush=True)
 
 
-def handle_gemini_live(ws, source_lang, target_lang):
+def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
     """End-to-end mode: stream audio directly to Gemini 3.5 Live Translate."""
     import websockets
     import asyncio
@@ -263,7 +263,6 @@ def handle_gemini_live(ws, source_lang, target_lang):
                 continue
 
     async def _gemini_stream():
-        api_key = GOOGLE_AI_KEY  # capture from outer scope
         url = (
             f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
             f"?key={api_key}"
@@ -380,7 +379,7 @@ def websocket_endpoint(ws):
         print(f"[WS] {source_lang} → {target_lang} via {mt_engine}", flush=True)
         if mt_engine == 'gemini':
             ws.send(json.dumps({'status': 'ready'}))
-            handle_gemini_live(ws, source_lang, target_lang)
+            handle_gemini_live(ws, source_lang, target_lang, api_key=GOOGLE_AI_KEY)
             return
         if context_brief:
             print(f"[WS] Context brief: {context_brief[:80]}...", flush=True)
