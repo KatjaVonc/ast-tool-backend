@@ -138,7 +138,6 @@ AZURE_TTS_VOICE  = {"it": "it-IT-ElsaNeural", "de": "de-DE-KatjaNeural"}
 def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
     """Full REST TTS — clean single MP3."""
     try:
-        # Convert digits to words
         text_before = text
         text = convert_numbers_to_words(text, target_lang)
         if text != text_before:
@@ -182,7 +181,6 @@ def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
             voice = AZURE_TTS_VOICE.get(target_lang, 'it-IT-ElsaNeural')
             lang_code = 'it-IT' if target_lang == 'it' else 'de-DE'
             print(f"[TTS/Azure] {voice}...", flush=True)
-            # Get Azure TTS token
             token_resp = requests.post(
                 f'https://{AZURE_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken',
                 headers={'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY},
@@ -235,6 +233,7 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
     import websockets
     import asyncio
 
+    # BCP-47 codes required by translationConfig.targetLanguageCode
     LANG_CODES = {"it": "it-IT", "de": "de-DE", "en": "en-US"}
     target_code = LANG_CODES.get(target_lang, target_lang)
 
@@ -271,18 +270,21 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
             f"?key={api_key}"
         )
 
-        # Correct setup format for raw WebSocket:
-        # inputAudioTranscription, outputAudioTranscription, and translationConfig
-        # are top-level fields inside "config", NOT nested inside "generationConfig".
+        # Correct raw WebSocket setup for gemini-3.5-live-translate-preview:
+        # top-level key is "setup", and inputAudioTranscription / outputAudioTranscription
+        # / translationConfig all live inside "generationConfig" (not at the setup level).
+        # Source: https://ai.google.dev/gemini-api/docs/live-api/live-translate
         setup_msg = {
-            "config": {
+            "setup": {
                 "model": "models/gemini-3.5-live-translate-preview",
-                "responseModalities": ["AUDIO"],
-                "inputAudioTranscription": {},
-                "outputAudioTranscription": {},
-                "translationConfig": {
-                    "targetLanguageCode": target_code,
-                    "echoTargetLanguage": False
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "inputAudioTranscription": {},
+                    "outputAudioTranscription": {},
+                    "translationConfig": {
+                        "targetLanguageCode": target_code,
+                        "echoTargetLanguage": False
+                    }
                 }
             }
         }
@@ -298,15 +300,13 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
                         while not stop_flag_g.is_set():
                             try:
                                 audio_data = audio_queue_g.get(timeout=0.1)
-                                # Correct raw WebSocket audio format: mediaChunks array
+                                # Use "audio" field (preferred over deprecated mediaChunks)
                                 msg = {
                                     "realtimeInput": {
-                                        "mediaChunks": [
-                                            {
-                                                "data": base64.b64encode(audio_data).decode('utf-8'),
-                                                "mimeType": "audio/pcm;rate=16000"
-                                            }
-                                        ]
+                                        "audio": {
+                                            "data": base64.b64encode(audio_data).decode('utf-8'),
+                                            "mimeType": "audio/pcm;rate=16000"
+                                        }
                                     }
                                 }
                                 await gemini_ws.send(json.dumps(msg))
@@ -467,7 +467,6 @@ def websocket_endpoint(ws):
                             try:
                                 async for msg in dg_ws:
                                     data = json.loads(msg)
-                                    # Skip non-dict messages (VAD events come as lists)
                                     if not isinstance(data, dict):
                                         continue
                                     if 'channel' not in data:
@@ -487,25 +486,21 @@ def websocket_endpoint(ws):
                                         }))
                                     else:
                                         print(f"[ASR] {transcript}", flush=True)
-                                        # Skip segments shorter than 3 words
                                         if len(transcript.split()) < 3:
                                             print(f"[ASR] Skipping short segment ({len(transcript.split())} words)", flush=True)
                                             ws.send(json.dumps({'transcript': transcript, 'is_final': True}))
                                             continue
                                         translation = translate(transcript, source_lang, target_lang, mt_engine, context_brief, formality)
                                         if not translation:
-                                            # MT failed but keep going - send transcript anyway
                                             ws.send(json.dumps({'transcript': transcript, 'translation': '[MT error]', 'is_final': True}))
                                             continue
 
-                                        # Send text immediately — don't wait for TTS
                                         ws.send(json.dumps({
                                             'transcript':  transcript,
                                             'translation': translation,
                                             'is_final':    True,
                                         }))
 
-                                        # Stream TTS in a separate thread so ASR keeps running
                                         tts_thread = threading.Thread(
                                             target=synthesise_streaming,
                                             args=(translation, target_lang, ws, tts_engine),
