@@ -263,9 +263,10 @@ def handle_gemini_live(ws, source_lang, target_lang):
                 continue
 
     async def _gemini_stream():
+        api_key = GOOGLE_AI_KEY  # capture from outer scope
         url = (
             f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
-            f"?key={GOOGLE_AI_KEY}"
+            f"?key={api_key}"
         )
 
         # Correct setup format for Gemini Live Translate
