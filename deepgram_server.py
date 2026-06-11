@@ -270,23 +270,23 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
             f"?key={api_key}"
         )
 
-        # Wire format confirmed from the API reference (ai.google.dev/api/live):
-        # - "setup" is the top-level key
-        # - "responseModalities" lives inside "generationConfig"
-        # - "inputAudioTranscription", "outputAudioTranscription", "translationConfig"
-        #   are direct fields of "setup" (BidiGenerateContentSetup), NOT inside generationConfig
+        # Proto-confirmed field placement (IBidiGenerateContentSetup, v1beta):
+        # - inputAudioTranscription  → direct field of setup
+        # - outputAudioTranscription → direct field of setup
+        # - translationConfig        → inside generationConfig (model-specific extension)
+        # - responseModalities       → inside generationConfig
         setup_msg = {
             "setup": {
                 "model": "models/gemini-3.5-live-translate-preview",
                 "generationConfig": {
-                    "responseModalities": ["AUDIO"]
+                    "responseModalities": ["AUDIO"],
+                    "translationConfig": {
+                        "targetLanguageCode": target_code,
+                        "echoTargetLanguage": False
+                    }
                 },
                 "inputAudioTranscription": {},
-                "outputAudioTranscription": {},
-                "translationConfig": {
-                    "targetLanguageCode": target_code,
-                    "echoTargetLanguage": False
-                }
+                "outputAudioTranscription": {}
             }
         }
 
