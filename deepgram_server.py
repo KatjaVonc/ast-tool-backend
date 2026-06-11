@@ -39,6 +39,7 @@ AZURE_KEY         = os.environ.get("AZURE_TRANSLATOR_KEY", "")
 AZURE_SPEECH_KEY  = os.environ.get("AZURE_SPEECH_KEY", "")
 AZURE_REGION      = os.environ.get("AZURE_REGION", "westeurope")
 GOOGLE_KEY        = os.environ.get("GOOGLE_TRANSLATE_KEY", "")
+GOOGLE_AI_KEY     = os.environ.get("GOOGLE_AI_KEY", "")
 
 @app.route('/')
 def home():
@@ -228,6 +229,183 @@ def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
         print(f"[TTS] Exception: {e}", flush=True)
 
 
+def handle_gemini_live(ws, source_lang, target_lang):
+    """
+    End-to-end mode: stream audio directly to Gemini 3.5 Live Translate.
+    Bypasses the cascade pipeline entirely.
+    """
+    import websockets
+    import asyncio
+
+    # Gemini language codes
+    LANG_CODES = {"it": "it-IT", "de": "de-DE", "en": "en-US"}
+    target_code = LANG_CODES.get(target_lang, target_lang)
+
+    print(f"[Gemini] Starting Live Translate {source_lang} → {target_lang}", flush=True)
+
+    audio_queue_g = queue.Queue(maxsize=200)
+    stop_flag_g   = threading.Event()
+
+    def receive_audio_g():
+        while not stop_flag_g.is_set():
+            try:
+                msg = ws.receive(timeout=0.1)
+                if msg:
+                    if isinstance(msg, bytes):
+                        try:
+                            audio_queue_g.put(msg, timeout=0.1)
+                        except queue.Full:
+                            pass
+                    elif isinstance(msg, str):
+                        try:
+                            data = json.loads(msg)
+                            if data.get('type') == 'close':
+                                stop_flag_g.set()
+                                break
+                        except:
+                            pass
+            except:
+                continue
+
+    def process_gemini():
+        asyncio.run(_gemini_stream())
+
+    async def _gemini_stream():
+        # Gemini Live API WebSocket URL
+        url = (
+            f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
+            f"?key={GOOGLE_AI_KEY}"
+        )
+
+        setup_msg = {
+            "setup": {
+                "model": "models/gemini-3.5-live-translate-preview",
+                "generation_config": {
+                    "response_modalities": ["AUDIO"],
+                    "speech_config": {
+                        "voice_config": {"prebuilt_voice_config": {"voice_name": "Aoede"}}
+                    }
+                },
+                "system_instruction": {
+                    "parts": [{"text": f"Translate spoken {source_lang} to {target_lang}. Preserve register and tone."}]
+                },
+                "tools": [],
+                "translation_config": {
+                    "target_language_code": target_code,
+                    "echo_target_language": False
+                },
+                "input_audio_transcription": {},
+                "output_audio_transcription": {}
+            }
+        }
+
+        try:
+            async with websockets.connect(url, ping_interval=20, ping_timeout=30) as gemini_ws:
+                print("[Gemini] Connected", flush=True)
+
+                # Send setup
+                await gemini_ws.send(json.dumps(setup_msg))
+                print("[Gemini] Setup sent", flush=True)
+
+                async def send_audio():
+                    try:
+                        while not stop_flag_g.is_set():
+                            try:
+                                audio_data = audio_queue_g.get(timeout=0.1)
+                                # Send PCM16 audio as realtime input
+                                msg = {
+                                    "realtime_input": {
+                                        "media_chunks": [{
+                                            "data": base64.b64encode(audio_data).decode('utf-8'),
+                                            "mime_type": "audio/pcm;rate=16000"
+                                        }]
+                                    }
+                                }
+                                await gemini_ws.send(json.dumps(msg))
+                            except queue.Empty:
+                                await asyncio.sleep(0.01)
+                    except Exception as e:
+                        print(f"[Gemini] Send error: {e}", flush=True)
+
+                async def receive_output():
+                    input_transcript_buf  = ""
+                    output_transcript_buf = ""
+                    audio_buf = []
+
+                    try:
+                        async for message in gemini_ws:
+                            if stop_flag_g.is_set():
+                                break
+                            try:
+                                data = json.loads(message)
+
+                                sc = data.get("serverContent", {})
+
+                                # Input transcription (source speech)
+                                it = sc.get("inputTranscription", {})
+                                if it.get("text"):
+                                    input_transcript_buf += it["text"]
+                                    ws.send(json.dumps({
+                                        "transcript": input_transcript_buf,
+                                        "is_final": False,
+                                        "mode": "gemini"
+                                    }))
+
+                                # Output transcription (translation text)
+                                ot = sc.get("outputTranscription", {})
+                                if ot.get("text"):
+                                    output_transcript_buf += ot["text"]
+
+                                # Audio output
+                                mt = sc.get("modelTurn", {})
+                                for part in mt.get("parts", []):
+                                    if "inlineData" in part:
+                                        audio_b64 = part["inlineData"]["data"]
+                                        audio_buf.append(audio_b64)
+                                        # Stream each chunk immediately
+                                        ws.send(json.dumps({
+                                            "type":       "tts_chunk",
+                                            "audio_b64":  audio_b64,
+                                            "audio_type": "audio/pcm",
+                                            "mode":       "gemini"
+                                        }))
+
+                                # Turn complete
+                                if sc.get("turnComplete"):
+                                    if input_transcript_buf or output_transcript_buf:
+                                        ws.send(json.dumps({
+                                            "transcript":  input_transcript_buf,
+                                            "translation": output_transcript_buf,
+                                            "is_final":    True,
+                                            "mode":        "gemini"
+                                        }))
+                                        print(f"[Gemini] Turn: {input_transcript_buf[:60]}", flush=True)
+                                    input_transcript_buf  = ""
+                                    output_transcript_buf = ""
+                                    audio_buf = []
+                                    ws.send(json.dumps({"type": "tts_done", "mode": "gemini"}))
+
+                            except Exception as e:
+                                print(f"[Gemini] Parse error: {e}", flush=True)
+                    except Exception as e:
+                        print(f"[Gemini] Receive error: {e}", flush=True)
+
+                await asyncio.gather(send_audio(), receive_output(), return_exceptions=True)
+
+        except Exception as e:
+            print(f"[Gemini] Connection error: {e}", flush=True)
+
+    audio_thread_g   = threading.Thread(target=receive_audio_g, daemon=True)
+    gemini_thread    = threading.Thread(target=process_gemini,   daemon=True)
+
+    audio_thread_g.start()
+    gemini_thread.start()
+
+    gemini_thread.join()
+    stop_flag_g.set()
+    audio_thread_g.join(timeout=2)
+
+
 @sock.route('/ws')
 def websocket_endpoint(ws):
     print("Client connected", flush=True)
@@ -242,6 +420,12 @@ def websocket_endpoint(ws):
         formality      = config.get('formality', 'default')
         tts_engine     = config.get('tts_engine', 'deepgram')
         print(f"[WS] {source_lang} → {target_lang} via {mt_engine}", flush=True)
+
+        # ── Gemini Live Translate mode (end-to-end, bypasses cascade) ──────────
+        if mt_engine == 'gemini':
+            ws.send(json.dumps({'status': 'ready'}))
+            handle_gemini_live(ws, source_lang, target_lang)
+            return
         if context_brief:
             print(f"[WS] Context brief: {context_brief[:80]}...", flush=True)
         ws.send(json.dumps({'status': 'ready'}))
