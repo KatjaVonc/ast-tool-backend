@@ -270,21 +270,22 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
             f"?key={api_key}"
         )
 
-        # Correct raw WebSocket setup for gemini-3.5-live-translate-preview:
-        # top-level key is "setup", and inputAudioTranscription / outputAudioTranscription
-        # / translationConfig all live inside "generationConfig" (not at the setup level).
-        # Source: https://ai.google.dev/gemini-api/docs/live-api/live-translate
+        # Wire format confirmed from the API reference (ai.google.dev/api/live):
+        # - "setup" is the top-level key
+        # - "responseModalities" lives inside "generationConfig"
+        # - "inputAudioTranscription", "outputAudioTranscription", "translationConfig"
+        #   are direct fields of "setup" (BidiGenerateContentSetup), NOT inside generationConfig
         setup_msg = {
             "setup": {
                 "model": "models/gemini-3.5-live-translate-preview",
                 "generationConfig": {
-                    "responseModalities": ["AUDIO"],
-                    "inputAudioTranscription": {},
-                    "outputAudioTranscription": {},
-                    "translationConfig": {
-                        "targetLanguageCode": target_code,
-                        "echoTargetLanguage": False
-                    }
+                    "responseModalities": ["AUDIO"]
+                },
+                "inputAudioTranscription": {},
+                "outputAudioTranscription": {},
+                "translationConfig": {
+                    "targetLanguageCode": target_code,
+                    "echoTargetLanguage": False
                 }
             }
         }
@@ -300,7 +301,6 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
                         while not stop_flag_g.is_set():
                             try:
                                 audio_data = audio_queue_g.get(timeout=0.1)
-                                # Use "audio" field (preferred over deprecated mediaChunks)
                                 msg = {
                                     "realtimeInput": {
                                         "audio": {
