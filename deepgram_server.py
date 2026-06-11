@@ -20,15 +20,12 @@ DEEPL_API_KEY    = os.environ.get('DEEPL_API_KEY', '')
 DEEPGRAM_VOICE   = {"it": "aura-2-livia-it", "de": "aura-2-viktoria-de"}
 
 def convert_numbers_to_words(text, lang):
-    """Replace digit sequences with spoken words so TTS reads them naturally."""
     lang_code = {"it": "it", "de": "de"}.get(lang, "en")
-
     def replace_number(match):
         try:
             return num2words(int(match.group(0)), lang=lang_code)
         except:
             return match.group(0)
-
     return re.sub(r'\d+', replace_number, text)
 
 ANTHROPIC_API_KEY = (
@@ -130,13 +127,11 @@ def translate(text, source_lang, target_lang, engine="deepl", context_brief="", 
     return None
 
 
-# TTS voice config
 GOOGLE_TTS_VOICE = {"it": "it-IT-Neural2-A", "de": "de-DE-Neural2-F"}
 AZURE_TTS_VOICE  = {"it": "it-IT-ElsaNeural", "de": "de-DE-KatjaNeural"}
 
 
 def synthesise_streaming(text, target_lang, ws, tts_engine="deepgram"):
-    """Full REST TTS — clean single MP3."""
     try:
         text_before = text
         text = convert_numbers_to_words(text, target_lang)
@@ -233,8 +228,6 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
     import websockets
     import asyncio
 
-    # Short BCP-47 codes as used in Google's own examples ("pl", "es", "de", "it")
-    # NOT locale variants like "it-IT" or "de-DE"
     print(f"[Gemini] Starting Live Translate {source_lang} → {target_lang}", flush=True)
 
     audio_queue_g = queue.Queue(maxsize=200)
@@ -268,20 +261,23 @@ def handle_gemini_live(ws, source_lang, target_lang, api_key=""):
             f"?key={api_key}"
         )
 
-        # All four fields inside generationConfig as shown in the official JS WebSocket example.
-        # targetLanguageCode uses short BCP-47 codes ("it", "de"), not locale variants ("it-IT").
+        # Derived from error log evidence across all attempts:
+        # - inputAudioTranscription  → setup level (accepted there, rejected in generationConfig)
+        # - outputAudioTranscription → setup level (same)
+        # - translationConfig        → inside generationConfig (accepted there, rejected at setup level)
+        # - targetLanguageCode       → short BCP-47 code ("it", "de"), not locale ("it-IT")
         setup_msg = {
             "setup": {
                 "model": "models/gemini-3.5-live-translate-preview",
                 "generationConfig": {
                     "responseModalities": ["AUDIO"],
-                    "inputAudioTranscription": {},
-                    "outputAudioTranscription": {},
                     "translationConfig": {
-                        "targetLanguageCode": target_lang,  # "it" or "de" directly
+                        "targetLanguageCode": target_lang,
                         "echoTargetLanguage": False
                     }
-                }
+                },
+                "inputAudioTranscription": {},
+                "outputAudioTranscription": {}
             }
         }
 
