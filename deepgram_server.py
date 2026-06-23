@@ -462,88 +462,82 @@ def websocket_endpoint(ws):
                                 else:
                                     print("Connected to Deepgram ASR", flush=True)
 
-                            async def send_audio():
-                                last_ka = asyncio.get_event_loop().time()
-                                try:
-                                    while not stop_flag.is_set():
-                                        try:
-                                            await dg_ws.send(audio_queue.get(timeout=0.1))
-                                            last_ka = asyncio.get_event_loop().time()
-                                        except queue.Empty:
-                                            now = asyncio.get_event_loop().time()
-                                            if now - last_ka > 5:
-                                                try:
-                                                    await dg_ws.send(
-                                                        json.dumps({"type": "KeepAlive"}))
-                                                except Exception:
-                                                    pass
-                                                last_ka = now
-                                            await asyncio.sleep(0.01)
-                                except Exception as e:
-                                    print(f"Send error: {e}", flush=True)
+                                async def send_audio():
+                                    last_ka = asyncio.get_event_loop().time()
+                                    try:
+                                        while not stop_flag.is_set():
+                                            try:
+                                                await dg_ws.send(audio_queue.get(timeout=0.1))
+                                                last_ka = asyncio.get_event_loop().time()
+                                            except queue.Empty:
+                                                now = asyncio.get_event_loop().time()
+                                                if now - last_ka > 5:
+                                                    try:
+                                                        await dg_ws.send(
+                                                            json.dumps({"type": "KeepAlive"}))
+                                                    except Exception:
+                                                        pass
+                                                    last_ka = now
+                                                await asyncio.sleep(0.01)
+                                    except Exception as e:
+                                        print(f"Send error: {e}", flush=True)
 
-                            async def receive_transcription():
-                                try:
-                                    async for msg in dg_ws:
-                                        data = json.loads(msg)
-                                        if not isinstance(data, dict):
-                                            continue
-                                        if 'channel' not in data:
-                                            continue
-                                        alts = data['channel'].get('alternatives', [])
-                                        if not alts:
-                                            continue
-                                        transcript = alts[0].get('transcript', '').strip()
-                                        is_final   = data.get('is_final', False)
-                                        if not transcript:
-                                            continue
+                                async def receive_transcription():
+                                    try:
+                                        async for msg in dg_ws:
+                                            data = json.loads(msg)
+                                            if not isinstance(data, dict):
+                                                continue
+                                            if 'channel' not in data:
+                                                continue
+                                            alts = data['channel'].get('alternatives', [])
+                                            if not alts:
+                                                continue
+                                            transcript = alts[0].get('transcript', '').strip()
+                                            is_final   = data.get('is_final', False)
+                                            if not transcript:
+                                                continue
 
-                                        if not is_final:
-                                            ws.send(json.dumps(
-                                                {'transcript': transcript, 'is_final': False}))
-                                            continue
+                                            if not is_final:
+                                                ws.send(json.dumps(
+                                                    {'transcript': transcript, 'is_final': False}))
+                                                continue
 
-                                        print(f"[ASR] {transcript}", flush=True)
-                                        if len(transcript.split()) < 3:
-                                            print(f"[ASR] Skipping short segment", flush=True)
-                                            ws.send(json.dumps(
-                                                {'transcript': transcript, 'is_final': True}))
-                                            continue
+                                            print(f"[ASR] {transcript}", flush=True)
+                                            if len(transcript.split()) < 3:
+                                                print(f"[ASR] Skipping short segment", flush=True)
+                                                ws.send(json.dumps(
+                                                    {'transcript': transcript, 'is_final': True}))
+                                                continue
 
-                                        # MT and send text -- await (non-blocking)
-                                        translation = await translate_async(
-                                            http, transcript, source_lang, target_lang,
-                                            mt_engine, context_brief, formality)
+                                            translation = await translate_async(
+                                                http, transcript, source_lang, target_lang,
+                                                mt_engine, context_brief, formality)
 
-                                        if not translation:
+                                            if not translation:
+                                                ws.send(json.dumps({'transcript': transcript,
+                                                                    'translation': '[MT error]',
+                                                                    'is_final': True}))
+                                                continue
+
                                             ws.send(json.dumps({'transcript': transcript,
-                                                                'translation': '[MT error]',
+                                                                'translation': translation,
                                                                 'is_final': True}))
-                                            continue
 
-                                        # Send text to frontend immediately
-                                        ws.send(json.dumps({'transcript': transcript,
-                                                            'translation': translation,
-                                                            'is_final': True}))
+                                            asyncio.ensure_future(
+                                                synthesise_async(
+                                                    http, translation, target_lang,
+                                                    ws, tts_engine))
 
-                                        # TTS -- also awaited, but doesn't block ASR
-                                        # because Deepgram keeps streaming in the
-                                        # send_audio coroutine concurrently
-                                        asyncio.ensure_future(
-                                            synthesise_async(
-                                                http, translation, target_lang,
-                                                ws, tts_engine))
+                                    except Exception as e:
+                                        print(f"Receive error: {e}", flush=True)
 
-                                except Exception as e:
-                                    print(f"Receive error: {e}", flush=True)
-
-                            await asyncio.gather(
-                                send_audio(),
-                                receive_transcription(),
-                                return_exceptions=True,
-                            )
-
-                        # Clean exit -- stop_flag set by user, don't reconnect
+                                await asyncio.gather(
+                                    send_audio(),
+                                    receive_transcription(),
+                                    return_exceptions=True,
+                                )
+                            # Exited dg_ws cleanly -- stop_flag set by user
                             break
                         except Exception as e:
                             print(f"[ASR] Connection error (attempt {reconnect_attempts}): {e}", flush=True)
