@@ -67,31 +67,46 @@ def translate(text, source_lang, target_lang, engine="deepl", context_brief="", 
         elif engine == "claude":
             from_name = {"de": "German", "it": "Italian"}.get(source_lang, source_lang)
             to_name   = {"de": "German", "it": "Italian"}.get(target_lang, target_lang)
-            resp = requests.post(
-                'https://api.anthropic.com/v1/messages',
-                headers={'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
-                json={
-                    'model': 'claude-haiku-4-5-20251001',
-                    'max_tokens': 512,
-                    'temperature': 0,
-                    'system': (
-                        'You are a simultaneous interpreter output channel. '
-                        'Rules: Output ONLY the ' + to_name + ' translation of the ' + from_name + ' input. '
-                        'No notes, no bold text, no commentary, no asterisks, no explanations, no apologies. '
-                        'Never mention that text is incomplete or has errors. '
-                        'Never add headers like "German translation:". '
-                        'Just translate and output the translation, nothing else, even if the segment is a fragment.'
-                        + (('\n\nSession context for translation decisions:\n' + context_brief) if context_brief else '')
-                    ),
-                    'messages': [{'role': 'user', 'content': text}],
-                },
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                result = resp.json()['content'][0]['text'].strip()
-                print(f"[MT/Claude] {result[:80]}", flush=True)
-                return result
-            print(f"[MT/Claude] Error {resp.status_code}", flush=True)
+            # Retry up to 3 times on 500/529 (transient Anthropic server errors)
+            for attempt in range(3):
+                try:
+                    resp = requests.post(
+                        'https://api.anthropic.com/v1/messages',
+                        headers={'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
+                        json={
+                            'model': 'claude-haiku-4-5-20251001',
+                            'max_tokens': 512,
+                            'temperature': 0,
+                            'system': (
+                                'You are a simultaneous interpreter output channel. '
+                                'Rules: Output ONLY the ' + to_name + ' translation of the ' + from_name + ' input. '
+                                'No notes, no bold text, no commentary, no asterisks, no explanations, no apologies. '
+                                'Never mention that text is incomplete or has errors. '
+                                'Never add headers like "German translation:". '
+                                'Just translate and output the translation, nothing else, even if the segment is a fragment.'
+                                + (('\n\nSession context for translation decisions:\n' + context_brief) if context_brief else '')
+                            ),
+                            'messages': [{'role': 'user', 'content': text}],
+                        },
+                        timeout=15,
+                    )
+                    if resp.status_code == 200:
+                        result = resp.json()['content'][0]['text'].strip()
+                        print(f"[MT/Claude] {result[:80]}", flush=True)
+                        return result
+                    elif resp.status_code in (500, 529) and attempt < 2:
+                        wait = 2 ** attempt  # 1s, 2s
+                        print(f"[MT/Claude] Error {resp.status_code}, retry {attempt + 1}/3 in {wait}s", flush=True)
+                        import time; time.sleep(wait)
+                    else:
+                        print(f"[MT/Claude] Error {resp.status_code} (gave up after {attempt + 1} attempts)", flush=True)
+                        break
+                except requests.exceptions.Timeout:
+                    if attempt < 2:
+                        print(f"[MT/Claude] Timeout, retry {attempt + 1}/3", flush=True)
+                    else:
+                        print(f"[MT/Claude] Timeout (gave up)", flush=True)
+                        break
 
         elif engine == "google":
             resp = requests.post(
@@ -432,8 +447,9 @@ def websocket_endpoint(ws):
                     async with websockets.connect(
                         dg_url,
                         additional_headers=headers,
-                        ping_interval=10,
-                        ping_timeout=30
+                        ping_interval=5,
+                        ping_timeout=20,
+                        close_timeout=10,
                     ) as dg_ws:
                         print("Connected to Deepgram ASR", flush=True)
 
@@ -447,7 +463,7 @@ def websocket_endpoint(ws):
                                         last_keepalive = asyncio.get_event_loop().time()
                                     except queue.Empty:
                                         now = asyncio.get_event_loop().time()
-                                        if now - last_keepalive > 8:
+                                        if now - last_keepalive > 5:
                                             try:
                                                 await dg_ws.send(json.dumps({"type": "KeepAlive"}))
                                             except:
