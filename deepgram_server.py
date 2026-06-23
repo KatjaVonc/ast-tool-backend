@@ -28,9 +28,11 @@ AZURE_REGION      = os.environ.get("AZURE_REGION", "westeurope")
 GOOGLE_KEY        = os.environ.get("GOOGLE_TRANSLATE_KEY", "")
 GOOGLE_AI_KEY     = os.environ.get("GOOGLE_AI_KEY", "")
 
-DEEPGRAM_VOICE   = {"it": "aura-2-livia-it",    "de": "aura-2-viktoria-de"}
-GOOGLE_TTS_VOICE = {"it": "it-IT-Neural2-A",     "de": "de-DE-Neural2-F"}
-AZURE_TTS_VOICE  = {"it": "it-IT-ElsaNeural",    "de": "de-DE-KatjaNeural"}
+# Voices selected for low TTFB: livia-it (127ms), kara-de (106ms), delia-en (127ms)
+DEEPGRAM_VOICE   = {"it": "aura-2-livia-it",     "de": "aura-2-kara-de",      "en": "aura-2-delia-en"}
+# Confirmed Neural2 voice names (Google Codelabs / Cloud TTS docs)
+GOOGLE_TTS_VOICE = {"it": "it-IT-Neural2-A",     "de": "de-DE-Neural2-A",    "en": "en-GB-Neural2-A"}
+AZURE_TTS_VOICE  = {"it": "it-IT-ElsaNeural",    "de": "de-DE-KatjaNeural",  "en": "en-GB-LibbyNeural"}
 
 
 @app.route('/')
@@ -78,8 +80,8 @@ async def translate_async(client, text, source_lang, target_lang,
             print(f"[MT/DeepL] Error {resp.status_code}", flush=True)
 
         elif engine == "claude":
-            from_name = {"de": "German", "it": "Italian"}.get(source_lang, source_lang)
-            to_name   = {"de": "German", "it": "Italian"}.get(target_lang, target_lang)
+            from_name = {"de": "German", "it": "Italian", "en": "English"}.get(source_lang, source_lang)
+            to_name   = {"de": "German", "it": "Italian", "en": "English"}.get(target_lang, target_lang)
             system = (
                 'You are a simultaneous interpreter output channel. '
                 'Rules: Output ONLY the ' + to_name + ' translation of the '
@@ -170,7 +172,7 @@ async def synthesise_async(client, text, target_lang, ws, tts_engine="deepgram")
         audio_bytes = None
 
         if tts_engine == "deepgram":
-            voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-livia-it')
+            voice = DEEPGRAM_VOICE.get(target_lang, 'aura-2-delia-en')
             print(f"[TTS/Deepgram] {voice}...", flush=True)
             resp = await client.post(
                 f'https://api.deepgram.com/v1/speak?model={voice}',
@@ -185,8 +187,8 @@ async def synthesise_async(client, text, target_lang, ws, tts_engine="deepgram")
                 print(f"[TTS/Deepgram] Error {resp.status_code}", flush=True)
 
         elif tts_engine == "google":
-            voice     = GOOGLE_TTS_VOICE.get(target_lang, 'it-IT-Neural2-A')
-            lang_code = 'it-IT' if target_lang == 'it' else 'de-DE'
+            voice     = GOOGLE_TTS_VOICE.get(target_lang, 'en-GB-Neural2-A')
+            lang_code = {'it': 'it-IT', 'de': 'de-DE', 'en': 'en-GB'}.get(target_lang, 'en-GB')
             print(f"[TTS/Google] {voice}...", flush=True)
             resp = await client.post(
                 f'https://texttospeech.googleapis.com/v1/text:synthesize?key={GOOGLE_KEY}',
@@ -201,8 +203,8 @@ async def synthesise_async(client, text, target_lang, ws, tts_engine="deepgram")
                 print(f"[TTS/Google] Error {resp.status_code}", flush=True)
 
         elif tts_engine == "azure":
-            voice     = AZURE_TTS_VOICE.get(target_lang, 'it-IT-ElsaNeural')
-            lang_code = 'it-IT' if target_lang == 'it' else 'de-DE'
+            voice     = AZURE_TTS_VOICE.get(target_lang, 'en-GB-LibbyNeural')
+            lang_code = {'it': 'it-IT', 'de': 'de-DE', 'en': 'en-GB'}.get(target_lang, 'en-GB')
             print(f"[TTS/Azure] {voice}...", flush=True)
             token_resp = await client.post(
                 f'https://{AZURE_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken',
@@ -444,15 +446,21 @@ def websocket_endpoint(ws):
 
                 # Single shared httpx client for all MT + TTS calls this session
                 async with httpx.AsyncClient() as http:
-                    try:
-                        async with websockets.connect(
-                            dg_url,
-                            additional_headers=headers,
-                            ping_interval=5,
-                            ping_timeout=20,
-                            close_timeout=10,
-                        ) as dg_ws:
-                            print("Connected to Deepgram ASR", flush=True)
+                    reconnect_attempts = 0
+                    while not stop_flag.is_set() and reconnect_attempts < 5:
+                        reconnect_attempts += 1
+                        try:
+                            async with websockets.connect(
+                                dg_url,
+                                additional_headers=headers,
+                                ping_interval=5,
+                                ping_timeout=20,
+                                close_timeout=10,
+                            ) as dg_ws:
+                                if reconnect_attempts > 1:
+                                    print(f"[ASR] Reconnected (attempt {reconnect_attempts})", flush=True)
+                                else:
+                                    print("Connected to Deepgram ASR", flush=True)
 
                             async def send_audio():
                                 last_ka = asyncio.get_event_loop().time()
@@ -535,8 +543,13 @@ def websocket_endpoint(ws):
                                 return_exceptions=True,
                             )
 
-                    except Exception as e:
-                        print(f"Deepgram ASR connection error: {e}", flush=True)
+                        # Clean exit -- stop_flag set by user, don't reconnect
+                            break
+                        except Exception as e:
+                            print(f"[ASR] Connection error (attempt {reconnect_attempts}): {e}", flush=True)
+                            if stop_flag.is_set():
+                                break
+                            await asyncio.sleep(1)
 
             asyncio.run(stream())
 
